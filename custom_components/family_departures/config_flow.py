@@ -133,7 +133,20 @@ class FamilyDeparturesConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     DATA_HOUSEHOLD_NAME, default="Familjen"
                 ): selector.TextSelector(),
-                vol.Required("home_location"): selector.LocationSelector(),
+                # The frontend's compute-initial-ha-form-data throws for a
+                # `location` selector that has neither a non-null suggested
+                # value nor a default, crashing the dialog before it renders.
+                # Seed it with the HA instance's configured home coordinates so
+                # the pin starts there and the user can still drag it.
+                vol.Required(
+                    "home_location",
+                    description={
+                        "suggested_value": {
+                            "latitude": self.hass.config.latitude,
+                            "longitude": self.hass.config.longitude,
+                        }
+                    },
+                ): selector.LocationSelector(),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema)
@@ -400,11 +413,18 @@ class FamilyDeparturesOptionsFlow(OptionsFlow):
             self._draft["car_fallback_minutes"] = user_input.get("car_fallback_minutes")
             return await self.async_step_profile_margins()
 
-        dest_default = None
         if "dest_lat" in self._draft and "dest_lon" in self._draft:
             dest_default = {
                 "latitude": self._draft["dest_lat"],
                 "longitude": self._draft["dest_lon"],
+            }
+        else:
+            # Fresh add has no draft destination yet. A `None` suggested value
+            # fails the frontend's non-null check and crashes the location
+            # selector, so fall back to the household home coordinates.
+            dest_default = {
+                "latitude": self.config_entry.data.get(DATA_HOME_LAT),
+                "longitude": self.config_entry.data.get(DATA_HOME_LON),
             }
         schema = vol.Schema(
             {

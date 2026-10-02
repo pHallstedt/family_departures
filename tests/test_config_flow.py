@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+import voluptuous as vol
 from custom_components.family_departures.const import (
     DATA_HOME_LAT,
     DATA_HOME_LON,
@@ -29,6 +30,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import selector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
@@ -101,6 +103,31 @@ def _assert_schema_renderable(schema: Any) -> None:
         )
 
 
+def _assert_location_fields_have_initial_value(schema: Any) -> None:
+    """A `location` selector must carry an initial value or the frontend crashes.
+
+    This models the exact failure condition from the HA frontend's
+    ``compute-initial-ha-form-data.ts`` / ``get-selector-initial-value.ts``:
+    for a ``location`` selector, ``getSelectorInitialValue`` throws unless the
+    field short-circuits first with either a non-null ``suggested_value`` or a
+    ``default``. A bare required location selector therefore crashes the dialog
+    before it renders (orphaning the flow -> ``already_in_progress`` on retry).
+    """
+    for key, value in schema.schema.items():
+        if not isinstance(value, selector.LocationSelector):
+            continue
+        has_default = getattr(key, "default", vol.UNDEFINED) is not vol.UNDEFINED
+        description = getattr(key, "description", None)
+        has_suggested = (
+            isinstance(description, dict)
+            and description.get("suggested_value") is not None
+        )
+        assert has_default or has_suggested, (
+            f"location field {key} has neither a default nor a non-null "
+            f"suggested_value and will crash the HA frontend before render"
+        )
+
+
 async def test_user_form_schema_is_frontend_renderable(hass: HomeAssistant) -> None:
     """The user step's schema must render in the frontend (no UNSUPPORTED fields).
 
@@ -122,6 +149,21 @@ async def test_user_form_schema_is_frontend_renderable(hass: HomeAssistant) -> N
     assert isinstance(household, dict)
     assert "selector" in household
     assert "text" in household["selector"]
+
+
+async def test_user_form_location_has_initial_value(hass: HomeAssistant) -> None:
+    """The user step's `home_location` must carry an initial value.
+
+    A bare required ``location`` selector crashes the HA frontend before the
+    dialog renders (the reported "Submit does nothing" / "already in progress"
+    bug). This fails against the pre-fix schema and passes once the field
+    carries a suggested value from the HA home coordinates.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    assert result["type"] == FlowResultType.FORM
+    _assert_location_fields_have_initial_value(result["data_schema"])
 
 
 # ---------------------------------------------------------------------------
@@ -666,3 +708,28 @@ async def test_options_forms_are_frontend_renderable(hass: HomeAssistant) -> Non
     )
     assert packing["step_id"] == "profile_packing"
     _assert_schema_renderable(packing["data_schema"])
+
+
+async def test_profile_destination_location_has_initial_value_on_add(
+    hass: HomeAssistant,
+) -> None:
+    """The `profile_destination` step's location must have an initial value on add.
+
+    On a fresh add there is no draft destination, so a ``None`` suggested value
+    would crash the frontend. The field must fall back to the household home
+    coordinates. Guards the latent location-selector crash in the options flow.
+    """
+    entry = await _setup_entry(hass)
+
+    flow_id = await _open_add_profile(hass, entry)
+    destination = await _submit_source(
+        hass,
+        flow_id,
+        {
+            "name": "Parent B",
+            "source_type": "ha_calendar",
+            "calendar_entity_id": "calendar.parent_b",
+        },
+    )
+    assert destination["step_id"] == "profile_destination"
+    _assert_location_fields_have_initial_value(destination["data_schema"])
