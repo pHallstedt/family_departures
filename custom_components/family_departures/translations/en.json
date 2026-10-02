@@ -1,0 +1,309 @@
+{
+  "title": "Family Departures",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Family Departures",
+        "description": "Set up the household for departure planning.",
+        "data": {
+          "household_name": "Household name",
+          "home_location": "Home location"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Family Departures is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Family Departures",
+        "menu_options": {
+          "add_profile": "Add a profile",
+          "edit_profile": "Edit a profile",
+          "remove_profile": "Remove a profile",
+          "settings": "Notification settings"
+        }
+      },
+      "settings": {
+        "title": "Notification settings",
+        "description": "During development every notification can be routed to one test script.",
+        "data": {
+          "dry_run": "Dry run (log only, do not call scripts)",
+          "test_recipient_script": "Test recipient script"
+        }
+      },
+      "edit_profile": {
+        "title": "Choose profile",
+        "data": {
+          "profile_id": "Profile"
+        }
+      },
+      "remove_profile": {
+        "title": "Remove profile",
+        "data": {
+          "profile_id": "Profile"
+        }
+      },
+      "remove_confirm": {
+        "title": "Remove profile",
+        "description": "Removing this profile deletes its settings, its stored schedule link and all its entities. This cannot be undone."
+      },
+      "profile_source": {
+        "title": "Schedule source",
+        "description": "The ICS link holds a personal token and is stored securely. Leave it blank to keep the saved link.",
+        "data": {
+          "name": "Display name",
+          "source_type": "Source type",
+          "ics_url": "ICS link",
+          "calendar_entity_id": "Calendar entity",
+          "exclude_patterns": "Exclude patterns (comma separated)",
+          "include_patterns": "Include patterns (comma separated)"
+        }
+      },
+      "profile_destination": {
+        "title": "Destination and travel mode",
+        "description": "Public-transport margins stay available even when the default mode is car.",
+        "data": {
+          "destination_location": "Destination",
+          "default_mode": "Default travel mode",
+          "static_minutes": "Static travel minutes (bike/walk, door to door)",
+          "static_label": "Static mode label",
+          "weather_adjust": "Add a weather surcharge to the static time",
+          "car_fallback_minutes": "Car fallback minutes"
+        }
+      },
+      "profile_margins": {
+        "title": "Margins and expected days",
+        "data": {
+          "is_adult": "Adult (sets arrival margin default to 0)",
+          "arrival": "Arrival margin (min)",
+          "departure": "Departure margin at home (min)",
+          "boarding": "Boarding margin (min)",
+          "parking_and_walk": "Parking and walk after car (min)",
+          "min_transfer": "Minimum transfer margin (min)",
+          "weekday_mask": "Expected activity days"
+        }
+      },
+      "profile_packing": {
+        "title": "Packing rule",
+        "description": "Optional. A summary substring that triggers a packing item. {preview}",
+        "data": {
+          "packing_match": "Summary match (case-insensitive)",
+          "packing_item": "Item to pack"
+        }
+      },
+      "profile_notifications": {
+        "title": "Notifications and channels",
+        "description": "Channel scripts are optional so profiles without a phone can still be configured.",
+        "data": {
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "notifications_enabled": "Notifications enabled",
+          "evening_notice_enabled": "Evening summary enabled",
+          "change_threshold_minutes": "Change threshold (min)",
+          "person_entity_id": "Person entity (presence)",
+          "script_push": "Push script",
+          "script_tts": "TTS script",
+          "script_family_chat": "Family chat script"
+        }
+      },
+      "profile_test": {
+        "title": "Test calculation",
+        "description": "{summary}"
+      }
+    },
+    "error": {
+      "ics_required": "An ICS link is required for this source type.",
+      "calendar_required": "A calendar entity is required for this source type.",
+      "cannot_connect": "The ICS link could not be fetched.",
+      "invalid_calendar": "The response was not a valid calendar."
+    },
+    "abort": {
+      "no_profiles": "No profiles configured yet."
+    },
+    "selector": {
+      "source_type": {
+        "options": {
+          "ics": "ICS link",
+          "ha_calendar": "Home Assistant calendar"
+        }
+      },
+      "mode": {
+        "options": {
+          "public_transport": "Public transport",
+          "car": "Car",
+          "static": "Bike/walk (static time)"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_person": {
+      "message": "No configured profile named \"{person_id}\"."
+    },
+    "unknown_plan": {
+      "message": "No current plan with id \"{plan_id}\"."
+    },
+    "invalid_date": {
+      "message": "The date could not be parsed."
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Refresh",
+      "description": "Recompute departure plans, optionally for a single person.",
+      "fields": {
+        "person_id": {
+          "name": "Person",
+          "description": "Profile id to refresh. Leave empty to refresh everyone."
+        }
+      }
+    },
+    "mark_departed": {
+      "name": "Mark departed",
+      "description": "Close the current plan after a confirmed departure.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profile id." },
+        "plan_id": {
+          "name": "Plan id",
+          "description": "The current plan id to close."
+        }
+      }
+    },
+    "set_override": {
+      "name": "Set day override",
+      "description": "Override transport mode, attendance or arrival time for a date.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profile id." },
+        "date": {
+          "name": "Date",
+          "description": "The local date the override applies to."
+        },
+        "mode": {
+          "name": "Transport mode",
+          "description": "Override the day's travel mode."
+        },
+        "attendance": {
+          "name": "Attendance",
+          "description": "Override the day's attendance."
+        },
+        "arrival_time": {
+          "name": "Arrival time",
+          "description": "Replace the day's arrival requirement (local time)."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "Clear day override",
+      "description": "Remove a per-day override.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profile id." },
+        "date": {
+          "name": "Date",
+          "description": "The local date whose override is removed."
+        }
+      }
+    },
+    "get_alternatives": {
+      "name": "Get alternatives",
+      "description": "Return the reachable journeys for the current plan.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profile id." }
+      }
+    },
+    "select_journey": {
+      "name": "Select journey",
+      "description": "Record an explicitly chosen journey for the current plan.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profile id." },
+        "plan_id": {
+          "name": "Plan id",
+          "description": "The current plan id."
+        },
+        "journey_id": {
+          "name": "Journey id",
+          "description": "The journey to select."
+        }
+      }
+    },
+    "reopen_today": {
+      "name": "Reopen today",
+      "description": "Reopen today's mission after it was closed by a departure.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profile id." }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "event_start": { "name": "First event start" },
+      "arrival_deadline": { "name": "Arrival deadline" },
+      "recommended_leave_time": { "name": "Recommended leave time" },
+      "latest_leave_time": { "name": "Latest leave time" },
+      "predicted_arrival": { "name": "Predicted arrival" },
+      "travel_minutes": { "name": "Travel time" },
+      "departure_status": {
+        "name": "Departure status",
+        "state": {
+          "no_event": "No event",
+          "scheduled": "Scheduled",
+          "preparing": "Preparing",
+          "leave_now": "Leave now",
+          "late": "Late",
+          "departed": "Departed",
+          "skipped": "Skipped",
+          "cannot_arrive_on_time": "Cannot arrive on time",
+          "needs_configuration": "Needs configuration"
+        }
+      },
+      "plan_quality": {
+        "name": "Plan quality",
+        "state": {
+          "realtime": "Realtime",
+          "scheduled": "Scheduled",
+          "estimated": "Estimated",
+          "stale": "Stale",
+          "unavailable": "Unavailable"
+        }
+      },
+      "route_summary": { "name": "Route" },
+      "packing_list": { "name": "Packing list" },
+      "packing_list_tomorrow": { "name": "Packing list tomorrow" },
+      "default_transport": { "name": "Default transport" }
+    },
+    "binary_sensor": {
+      "departure_disruption": { "name": "Departure disruption" },
+      "schedule_needs_review": { "name": "Schedule needs review" }
+    },
+    "select": {
+      "today_transport": {
+        "name": "Today's transport",
+        "state": {
+          "default": "Default",
+          "public_transport": "Public transport",
+          "car": "Car",
+          "static": "Bike/walk (static time)"
+        }
+      },
+      "today_attendance": {
+        "name": "Today's attendance",
+        "state": {
+          "normal": "Normal",
+          "off": "Off",
+          "remote": "Remote",
+          "sick": "Sick"
+        }
+      }
+    },
+    "switch": {
+      "departure_notifications": { "name": "Departure notifications" }
+    },
+    "button": {
+      "ack_packing": { "name": "Acknowledge packing list" },
+      "refresh_departure": { "name": "Refresh departure" },
+      "mark_departed": { "name": "Mark departed" }
+    }
+  }
+}

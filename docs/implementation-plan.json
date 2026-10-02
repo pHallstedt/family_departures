@@ -1,0 +1,29 @@
+{
+  "goal": "Implement family_departures v1 (spec Steps 0-3) per docs/implementation-plan.md and home-assistant-avgangsplan.md",
+  "instructions": "Pick the first item with done=false whose depends_on are all done. Read its section in docs/implementation-plan.md (section 5) and follow section 1 rules. Set done=true when finished. Set complete=true when all items are done.",
+  "complete": true,
+  "items": [
+    { "id": "T00", "title": "SL Journey Planner v2 investigation and realtime decision", "depends_on": [], "review_skills": ["review-journey-planning"], "done": true },
+    { "id": "T01", "title": "Repository scaffold and tooling (HA 2026.9.4, Python >=3.14.2, PHACC 0.13.367)", "depends_on": [], "review_skills": ["review-ha-integration"], "done": true },
+    { "id": "T02", "title": "Domain models and time utilities", "depends_on": ["T01"], "review_skills": ["review-ha-integration", "review-tests"], "done": true },
+    { "id": "T03", "title": "ICS parser and fetcher", "depends_on": ["T02"], "review_skills": ["review-schedule-sources", "review-privacy-security"], "done": true },
+    { "id": "T04", "title": "HA calendar provider", "depends_on": ["T02"], "review_skills": ["review-schedule-sources", "review-ha-integration"], "done": true },
+    { "id": "T05", "title": "Schedule selection", "depends_on": ["T02"], "review_skills": ["review-schedule-sources"], "done": true },
+    { "id": "T06", "title": "Packing list", "depends_on": ["T02"], "review_skills": ["review-schedule-sources"], "done": true },
+    { "id": "T07", "title": "Planner: car and static", "depends_on": ["T02"], "review_skills": ["review-journey-planning"], "done": true },
+    { "id": "T08", "title": "Planner: public transport", "depends_on": ["T02", "T00", "T07"], "review_skills": ["review-journey-planning"], "done": true },
+    { "id": "T09", "title": "SL Journey Planner v2 adapter", "depends_on": ["T02", "T00"], "review_skills": ["review-journey-planning"], "done": true },
+    { "id": "T10", "title": "Waze provider", "depends_on": ["T02"], "review_skills": ["review-journey-planning"], "done": true },
+    { "id": "T11", "title": "Store and mission state", "depends_on": ["T02"], "review_skills": ["review-ha-integration"], "done": true },
+    { "id": "T15", "title": "Notification policy", "depends_on": ["T02"], "review_skills": ["review-notifications"], "done": true },
+    { "id": "T12", "title": "Config flow and options flow", "depends_on": ["T02", "T03", "T04"], "review_skills": ["review-ha-integration", "review-privacy-security"], "done": true },
+    { "id": "T13", "title": "Coordinator", "depends_on": ["T03", "T04", "T05", "T06", "T07", "T08", "T09", "T10", "T11"], "review_skills": ["review-ha-integration", "review-journey-planning"], "done": true },
+    { "id": "T14", "title": "Entities", "depends_on": ["T13"], "review_skills": ["review-ha-integration", "review-privacy-security"], "done": true },
+    { "id": "T16", "title": "Services", "depends_on": ["T13"], "review_skills": ["review-ha-integration"], "done": true },
+    { "id": "T17", "title": "Scheduler", "depends_on": ["T13", "T15"], "review_skills": ["review-notifications", "review-ha-integration"], "done": true },
+    { "id": "T18", "title": "Dispatcher (incl. test recipient mode), notification actions and example scripts", "depends_on": ["T17"], "review_skills": ["review-notifications", "review-privacy-security"], "done": true },
+    { "id": "T19", "title": "Diagnostics and repairs", "depends_on": ["T13"], "review_skills": ["review-privacy-security"], "done": true },
+    { "id": "T20", "title": "Dashboard example, README, translations", "depends_on": ["T14", "T18"], "review_skills": ["review-privacy-security"], "done": true },
+    { "id": "T21", "title": "End-to-end scenario tests and coverage audit", "depends_on": ["T14", "T16", "T17", "T18", "T19"], "review_skills": ["review-tests"], "done": true }
+  ]
+}

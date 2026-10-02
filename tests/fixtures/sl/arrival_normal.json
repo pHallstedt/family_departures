@@ -1,0 +1,619 @@
+{
+  "journeys": [
+    {
+      "tripDuration": 858,
+      "tripRtDuration": 858,
+      "interchanges": 0,
+      "isAdditional": false,
+      "rating": 0,
+      "legs": [
+        {
+          "duration": 120,
+          "origin": {
+            "id": "coord:PLACEHOLDER",
+            "name": "Startpunkt (koordinat)",
+            "type": "address",
+            "departureTimePlanned": "2026-10-05T06:02:54Z",
+            "departureTimeEstimated": "2026-10-05T06:02:54Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:02:54Z",
+            "properties": {
+              "area": "0"
+            }
+          },
+          "destination": {
+            "id": "18001051|11|1",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:04:54Z",
+            "arrivalTimeEstimated": "2026-10-05T06:04:54Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:04:54Z",
+            "properties": {
+              "platform": "1",
+              "area": "11"
+            }
+          },
+          "distance": 71,
+          "transportation": {
+            "product": {
+              "class": 100,
+              "name": "footpath",
+              "iconId": 100
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 180,
+          "origin": {
+            "id": "18001051|11|1",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:04:54Z",
+            "departureTimeEstimated": "2026-10-05T06:04:54Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:04:54Z",
+            "properties": {
+              "platform": "1",
+              "area": "11"
+            }
+          },
+          "destination": {
+            "id": "9025001000002051",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:07:54Z",
+            "arrivalTimeEstimated": "2026-10-05T06:07:54Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:07:54Z",
+            "properties": {
+              "platform": "3",
+              "platformName": "1",
+              "area": "3"
+            }
+          },
+          "transportation": {
+            "product": {
+              "class": 99,
+              "name": "footpath",
+              "iconId": 99
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 258,
+          "origin": {
+            "id": "9025001000002051",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:07:54Z",
+            "departureTimeEstimated": "2026-10-05T06:07:54Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:07:54Z",
+            "properties": {
+              "platform": "3",
+              "platformName": "1",
+              "area": "3"
+            }
+          },
+          "destination": {
+            "id": "9025001000001131",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:12:12Z",
+            "arrivalTimeEstimated": "2026-10-05T06:12:12Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:12:12Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "transportation": {
+            "product": {
+              "id": 8,
+              "class": 2,
+              "name": "Tunnelbana",
+              "iconId": 1
+            },
+            "id": "tfs:02017: :H:y01",
+            "name": "Tunnelbana tunnelbanans gröna linje 17",
+            "disassembledName": "17",
+            "number": "tunnelbanans gröna linje 17",
+            "destination": {
+              "id": "18001301",
+              "name": "Vällingby",
+              "type": "stop"
+            },
+            "operator": {
+              "id": "1",
+              "name": "Storstockholms Lokaltrafik"
+            }
+          },
+          "infos": [],
+          "properties": {
+            "tripId": "9015001001710293"
+          }
+        },
+        {
+          "duration": 180,
+          "origin": {
+            "id": "9025001000001131",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:12:12Z",
+            "departureTimeEstimated": "2026-10-05T06:12:12Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:12:12Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "destination": {
+            "id": "9025001000010493",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:15:12Z",
+            "arrivalTimeEstimated": "2026-10-05T06:15:12Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:15:12Z",
+            "properties": {
+              "platform": "1",
+              "area": "7"
+            }
+          },
+          "transportation": {
+            "product": {
+              "class": 99,
+              "name": "footpath",
+              "iconId": 99
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 120,
+          "origin": {
+            "id": "18010151|7|1",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:15:12Z",
+            "departureTimeEstimated": "2026-10-05T06:15:12Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:15:12Z",
+            "properties": {
+              "platform": "1",
+              "area": "7"
+            }
+          },
+          "destination": {
+            "id": "coord:PLACEHOLDER",
+            "name": "Startpunkt (koordinat)",
+            "type": "address",
+            "arrivalTimePlanned": "2026-10-05T06:17:12Z",
+            "arrivalTimeEstimated": "2026-10-05T06:17:12Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:17:12Z",
+            "properties": {
+              "area": "0"
+            }
+          },
+          "distance": 338,
+          "transportation": {
+            "product": {
+              "class": 100,
+              "name": "footpath",
+              "iconId": 100
+            }
+          },
+          "infos": []
+        }
+      ]
+    },
+    {
+      "tripDuration": 780,
+      "tripRtDuration": 780,
+      "interchanges": 0,
+      "isAdditional": false,
+      "rating": 0,
+      "legs": [
+        {
+          "duration": 60,
+          "origin": {
+            "id": "coord:PLACEHOLDER",
+            "name": "Startpunkt (koordinat)",
+            "type": "address",
+            "departureTimePlanned": "2026-10-05T06:06:00Z",
+            "departureTimeEstimated": "2026-10-05T06:06:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:06:00Z",
+            "properties": {
+              "area": "0"
+            }
+          },
+          "destination": {
+            "id": "18001051|15|1",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:07:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:07:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:07:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "15"
+            }
+          },
+          "distance": 25,
+          "transportation": {
+            "product": {
+              "class": 100,
+              "name": "footpath",
+              "iconId": 100
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 240,
+          "origin": {
+            "id": "18001051|15|1",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:07:00Z",
+            "departureTimeEstimated": "2026-10-05T06:07:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:07:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "15"
+            }
+          },
+          "destination": {
+            "id": "9025001000005310",
+            "name": "Stockholm City, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:11:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:11:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:11:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "transportation": {
+            "product": {
+              "class": 99,
+              "name": "footpath",
+              "iconId": 99
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 120,
+          "origin": {
+            "id": "9025001000005310",
+            "name": "Stockholm City, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:11:00Z",
+            "departureTimeEstimated": "2026-10-05T06:11:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:11:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "destination": {
+            "id": "9025001000005320",
+            "name": "Stockholm Odenplan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:13:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:13:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:13:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "transportation": {
+            "product": {
+              "id": 1,
+              "class": 0,
+              "name": "Tåg",
+              "iconId": 6
+            },
+            "id": "tfs:04043: :R:y01",
+            "name": "Tåg Pendeltåg 43",
+            "disassembledName": "43",
+            "number": "Pendeltåg 43",
+            "destination": {
+              "id": "18006081",
+              "name": "Kungsängen",
+              "type": "stop"
+            },
+            "operator": {
+              "id": "1",
+              "name": "Storstockholms Lokaltrafik"
+            }
+          },
+          "infos": [],
+          "properties": {
+            "tripId": "9015001004302816"
+          }
+        },
+        {
+          "duration": 240,
+          "origin": {
+            "id": "9025001000005320",
+            "name": "Stockholm Odenplan, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:13:00Z",
+            "departureTimeEstimated": "2026-10-05T06:13:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:13:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "destination": {
+            "id": "9025001000010342",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:17:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:17:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:17:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "4"
+            }
+          },
+          "transportation": {
+            "product": {
+              "class": 99,
+              "name": "footpath",
+              "iconId": 99
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 120,
+          "origin": {
+            "id": "18010151|4|1",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:17:00Z",
+            "departureTimeEstimated": "2026-10-05T06:17:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:17:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "4"
+            }
+          },
+          "destination": {
+            "id": "coord:PLACEHOLDER",
+            "name": "Startpunkt (koordinat)",
+            "type": "address",
+            "arrivalTimePlanned": "2026-10-05T06:19:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:19:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:19:00Z",
+            "properties": {
+              "area": "0"
+            }
+          },
+          "distance": 250,
+          "transportation": {
+            "product": {
+              "class": 100,
+              "name": "footpath",
+              "iconId": 100
+            }
+          },
+          "infos": []
+        }
+      ]
+    },
+    {
+      "tripDuration": 900,
+      "tripRtDuration": 900,
+      "interchanges": 0,
+      "isAdditional": false,
+      "rating": 0,
+      "legs": [
+        {
+          "duration": 60,
+          "origin": {
+            "id": "coord:PLACEHOLDER",
+            "name": "Startpunkt (koordinat)",
+            "type": "address",
+            "departureTimePlanned": "2026-10-05T06:08:00Z",
+            "departureTimeEstimated": "2026-10-05T06:08:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:08:00Z",
+            "properties": {
+              "area": "0"
+            }
+          },
+          "destination": {
+            "id": "18001051|15|1",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:09:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:09:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:09:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "15"
+            }
+          },
+          "distance": 25,
+          "transportation": {
+            "product": {
+              "class": 100,
+              "name": "footpath",
+              "iconId": 100
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 360,
+          "origin": {
+            "id": "18001051|15|1",
+            "name": "T-Centralen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:09:00Z",
+            "departureTimeEstimated": "2026-10-05T06:09:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:09:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "15"
+            }
+          },
+          "destination": {
+            "id": "9025001000005312",
+            "name": "Stockholm City, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:15:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:15:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:15:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "2",
+              "area": "3"
+            }
+          },
+          "transportation": {
+            "product": {
+              "class": 99,
+              "name": "footpath",
+              "iconId": 99
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 120,
+          "origin": {
+            "id": "9025001000005312",
+            "name": "Stockholm City, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:15:00Z",
+            "departureTimeEstimated": "2026-10-05T06:15:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:15:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "2",
+              "area": "3"
+            }
+          },
+          "destination": {
+            "id": "9025001000005320",
+            "name": "Stockholm Odenplan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:17:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:17:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:17:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "transportation": {
+            "product": {
+              "id": 1,
+              "class": 0,
+              "name": "Tåg",
+              "iconId": 6
+            },
+            "id": "tfs:04041: :R:y01",
+            "name": "Tåg Pendeltåg 41",
+            "disassembledName": "41",
+            "number": "Pendeltåg 41",
+            "destination": {
+              "id": "18005121",
+              "name": "Märsta",
+              "type": "stop"
+            },
+            "operator": {
+              "id": "1",
+              "name": "Storstockholms Lokaltrafik"
+            }
+          },
+          "infos": [],
+          "properties": {
+            "tripId": "9015001004102716"
+          }
+        },
+        {
+          "duration": 240,
+          "origin": {
+            "id": "9025001000005320",
+            "name": "Stockholm Odenplan, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:17:00Z",
+            "departureTimeEstimated": "2026-10-05T06:17:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:17:00Z",
+            "properties": {
+              "platform": "1",
+              "platformName": "1",
+              "area": "1"
+            }
+          },
+          "destination": {
+            "id": "9025001000010342",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-10-05T06:21:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:21:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:21:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "4"
+            }
+          },
+          "transportation": {
+            "product": {
+              "class": 99,
+              "name": "footpath",
+              "iconId": 99
+            }
+          },
+          "infos": []
+        },
+        {
+          "duration": 120,
+          "origin": {
+            "id": "18010151|4|1",
+            "name": "Odenplan, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-10-05T06:21:00Z",
+            "departureTimeEstimated": "2026-10-05T06:21:00Z",
+            "departureTimeBaseTimetable": "2026-10-05T06:21:00Z",
+            "properties": {
+              "platform": "1",
+              "area": "4"
+            }
+          },
+          "destination": {
+            "id": "coord:PLACEHOLDER",
+            "name": "Startpunkt (koordinat)",
+            "type": "address",
+            "arrivalTimePlanned": "2026-10-05T06:23:00Z",
+            "arrivalTimeEstimated": "2026-10-05T06:23:00Z",
+            "arrivalTimeBaseTimetable": "2026-10-05T06:23:00Z",
+            "properties": {
+              "area": "0"
+            }
+          },
+          "distance": 250,
+          "transportation": {
+            "product": {
+              "class": 100,
+              "name": "footpath",
+              "iconId": 100
+            }
+          },
+          "infos": []
+        }
+      ]
+    }
+  ]
+}

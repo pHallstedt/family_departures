@@ -1,0 +1,22 @@
+# Local secrets (real ICS URLs, tokens, coordinates, addresses) - never commit
+local/
+
+# Python / virtualenv
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+# Workflow task-tracking artifacts (may reference private source material)
+.agents/

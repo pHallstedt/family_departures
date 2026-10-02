@@ -1,0 +1,18 @@
+{
+  "systemMessages": [
+    {
+      "type": "error",
+      "module": "BROKER",
+      "code": -4001,
+      "text": "invalid date",
+      "subType": ""
+    },
+    {
+      "type": "error",
+      "module": "BROKER",
+      "code": 0,
+      "text": "invalid date or time",
+      "subType": ""
+    }
+  ]
+}

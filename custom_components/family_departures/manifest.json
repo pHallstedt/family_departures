@@ -1,0 +1,13 @@
+{
+  "domain": "family_departures",
+  "name": "Family Departures",
+  "codeowners": ["@pontushallstedt"],
+  "config_flow": true,
+  "documentation": "https://github.com/pontushallstedt/family_departures",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/pontushallstedt/family_departures/issues",
+  "loggers": ["ical"],
+  "requirements": ["ical==14.1.1"],
+  "version": "0.1.0"
+}

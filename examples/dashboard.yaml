@@ -1,0 +1,231 @@
+# Example Lovelace dashboard for the Family Departures integration (spec §13).
+#
+# Built from Home Assistant's standard cards only -- no custom frontend is
+# required in v1. Copy this into a dashboard (Settings -> Dashboards -> raw
+# configuration editor) and adjust the entity ids if you renamed any entities.
+#
+# Entity ids below are illustrative defaults for a generic household. Each
+# entity belongs to a per-profile device, so an entity's id is
+# `<domain>.<profile>_<entity name>` (e.g.
+# `sensor.kid_a_recommended_leave_time`). The example profile ids are
+# `kid_a`, `kid_b`, `parent_a` and `parent_b`; the actual ids depend on the
+# profiles you configure (each id is the slug of the profile name), so replace
+# them to match your own set.
+#
+# This file contains no real names, addresses, coordinates, ICS links or
+# tokens (spec §12.4, §15): only the integration's own entity ids.
+#
+# NOTE: While the integration's global "test recipient" is set (development
+# mode, spec §12.4), every push for every person is routed to one phone with a
+# "[TEST <Name>]" prefix. Clear the test recipient in the integration options
+# before relying on per-person delivery.
+
+title: Avgångsplan
+views:
+  # -------------------------------------------------------------------------
+  # Today -- active family overview, sorted by the nearest recommended
+  # departure, followed by a detail card per person (spec §13).
+  # -------------------------------------------------------------------------
+  - title: Idag
+    path: idag
+    icon: mdi:home-clock
+    cards:
+      - type: markdown
+        title: Testläge
+        content: >-
+          ⚠️ **Testmottagare aktiv.** Alla notiser för alla personer går till
+          en telefon med prefixet `[TEST <Namn>]`. Rensa testmottagaren i
+          integrationens inställningar innan ni litar på leverans per person.
+        # Delete this card once the test recipient has been cleared.
+
+      - type: entities
+        title: Familjeöversikt – nästa avgång
+        # HA sorts entities-card rows manually; this is the at-a-glance list.
+        # Use the per-person cards below for the full detail.
+        entities:
+          - entity: sensor.kid_a_recommended_leave_time
+            name: Kid A
+            secondary_info: last-updated
+          - entity: sensor.kid_b_recommended_leave_time
+            name: Kid B
+            secondary_info: last-updated
+          - entity: sensor.parent_a_recommended_leave_time
+            name: Parent A
+            secondary_info: last-updated
+          - entity: sensor.parent_b_recommended_leave_time
+            name: Parent B
+            secondary_info: last-updated
+
+      # ---- Kid A ------------------------------------------------------------
+      - type: markdown
+        title: Kid A – när ska jag gå?
+        # Distinct messages for the three empty/error cases (spec §13):
+        # "Inget schema registrerat" / "Ledig" / "Schemakälla kunde inte
+        # hämtas" -- derived from the departure_status `day_status` attribute.
+        content: >-
+          {% set ds = state_attr('sensor.kid_a_departure_status', 'day_status') %}
+          {% if ds == 'no_schedule' %}
+          **Inget schema registrerat.**
+          {% elif ds in ['day_off', 'no_activity'] %}
+          **Ledig.**
+          {% elif ds == 'source_error' %}
+          **Schemakälla kunde inte hämtas.** Senaste cache visas om den finns.
+          {% else %}
+          Status: **{{ states('sensor.kid_a_departure_status') }}** ·
+          Kvalitet: {{ states('sensor.kid_a_plan_quality') }}
+          {% endif %}
+      - type: entities
+        entities:
+          - entity: sensor.kid_a_event_start
+          - entity: sensor.kid_a_recommended_leave_time
+          - entity: sensor.kid_a_latest_leave_time
+          - entity: sensor.kid_a_predicted_arrival
+          - entity: sensor.kid_a_route_summary
+          - entity: sensor.kid_a_plan_quality
+          - entity: binary_sensor.kid_a_departure_disruption
+          - entity: sensor.kid_a_packing_list
+          - type: divider
+          - entity: select.kid_a_today_transport
+          - entity: select.kid_a_today_attendance
+          - entity: switch.kid_a_departure_notifications
+          - entity: button.kid_a_mark_departed
+          - entity: button.kid_a_refresh_departure
+          - entity: button.kid_a_ack_packing
+
+      # ---- Kid B ------------------------------------------------------------
+      - type: markdown
+        title: Kid B – när ska jag gå?
+        content: >-
+          {% set ds = state_attr('sensor.kid_b_departure_status', 'day_status') %}
+          {% if ds == 'no_schedule' %}
+          **Inget schema registrerat.**
+          {% elif ds in ['day_off', 'no_activity'] %}
+          **Ledig.**
+          {% elif ds == 'source_error' %}
+          **Schemakälla kunde inte hämtas.** Senaste cache visas om den finns.
+          {% else %}
+          Status: **{{ states('sensor.kid_b_departure_status') }}** ·
+          Kvalitet: {{ states('sensor.kid_b_plan_quality') }}
+          {% endif %}
+      - type: entities
+        entities:
+          - entity: sensor.kid_b_event_start
+          - entity: sensor.kid_b_recommended_leave_time
+          - entity: sensor.kid_b_latest_leave_time
+          - entity: sensor.kid_b_predicted_arrival
+          - entity: sensor.kid_b_route_summary
+          - entity: sensor.kid_b_plan_quality
+          - entity: binary_sensor.kid_b_departure_disruption
+          - entity: sensor.kid_b_packing_list
+          - type: divider
+          - entity: select.kid_b_today_transport
+          - entity: select.kid_b_today_attendance
+          - entity: switch.kid_b_departure_notifications
+          - entity: button.kid_b_mark_departed
+          - entity: button.kid_b_refresh_departure
+          - entity: button.kid_b_ack_packing
+
+      # ---- Parent A ---------------------------------------------------------
+      - type: markdown
+        title: Parent A – när ska jag gå?
+        content: >-
+          {% set ds = state_attr('sensor.parent_a_departure_status', 'day_status') %}
+          {% if ds == 'no_schedule' %}
+          **Inget schema registrerat.**
+          {% elif ds in ['day_off', 'no_activity'] %}
+          **Ledig.**
+          {% elif ds == 'source_error' %}
+          **Schemakälla kunde inte hämtas.** Senaste cache visas om den finns.
+          {% else %}
+          Status: **{{ states('sensor.parent_a_departure_status') }}** ·
+          Kvalitet: {{ states('sensor.parent_a_plan_quality') }}
+          {% endif %}
+      - type: entities
+        entities:
+          - entity: sensor.parent_a_event_start
+          - entity: sensor.parent_a_recommended_leave_time
+          - entity: sensor.parent_a_latest_leave_time
+          - entity: sensor.parent_a_predicted_arrival
+          - entity: sensor.parent_a_route_summary
+          - entity: sensor.parent_a_plan_quality
+          - entity: binary_sensor.parent_a_departure_disruption
+          - type: divider
+          - entity: select.parent_a_today_transport
+          - entity: select.parent_a_today_attendance
+          - entity: switch.parent_a_departure_notifications
+          - entity: button.parent_a_mark_departed
+          - entity: button.parent_a_refresh_departure
+
+      # ---- Parent B ---------------------------------------------------------
+      - type: markdown
+        title: Parent B – när ska jag gå?
+        content: >-
+          {% set ds = state_attr('sensor.parent_b_departure_status', 'day_status') %}
+          {% if ds == 'no_schedule' %}
+          **Inget schema registrerat.**
+          {% elif ds in ['day_off', 'no_activity'] %}
+          **Ledig.**
+          {% elif ds == 'source_error' %}
+          **Schemakälla kunde inte hämtas.** Senaste cache visas om den finns.
+          {% else %}
+          Status: **{{ states('sensor.parent_b_departure_status') }}** ·
+          Kvalitet: {{ states('sensor.parent_b_plan_quality') }}
+          {% endif %}
+      - type: entities
+        entities:
+          - entity: sensor.parent_b_event_start
+          - entity: sensor.parent_b_recommended_leave_time
+          - entity: sensor.parent_b_latest_leave_time
+          - entity: sensor.parent_b_predicted_arrival
+          - entity: sensor.parent_b_route_summary
+          - entity: sensor.parent_b_plan_quality
+          - entity: binary_sensor.parent_b_departure_disruption
+          - type: divider
+          - entity: select.parent_b_today_transport
+          - entity: select.parent_b_today_attendance
+          - entity: switch.parent_b_departure_notifications
+          - entity: button.parent_b_mark_departed
+          - entity: button.parent_b_refresh_departure
+
+  # -------------------------------------------------------------------------
+  # Tomorrow -- the preliminary next-day view with the evening packing lists,
+  # kept on a separate view so it never crowds today's screen (spec §13).
+  # -------------------------------------------------------------------------
+  - title: Imorgon
+    path: imorgon
+    icon: mdi:calendar-arrow-right
+    cards:
+      - type: markdown
+        content: >-
+          Preliminär plan för imorgon. Tiderna uppdateras under natten och
+          morgonen när nya schema- och trafikdata hämtas.
+      - type: entities
+        title: Packlistor inför imorgon
+        entities:
+          - entity: sensor.kid_a_packing_list_tomorrow
+            name: Kid A
+          - entity: sensor.kid_b_packing_list_tomorrow
+            name: Kid B
+          - entity: sensor.parent_a_packing_list_tomorrow
+            name: Parent A
+          - entity: sensor.parent_b_packing_list_tomorrow
+            name: Parent B
+
+  # -------------------------------------------------------------------------
+  # Diagnostics -- source health per person, for troubleshooting (spec §15).
+  # -------------------------------------------------------------------------
+  - title: Diagnostik
+    path: diagnostik
+    icon: mdi:stethoscope
+    cards:
+      - type: entities
+        title: Schema och källor
+        entities:
+          - entity: sensor.kid_a_default_transport
+          - entity: binary_sensor.kid_a_schedule_needs_review
+          - entity: sensor.kid_b_default_transport
+          - entity: binary_sensor.kid_b_schedule_needs_review
+          - entity: sensor.parent_a_default_transport
+          - entity: binary_sensor.parent_a_schedule_needs_review
+          - entity: sensor.parent_b_default_transport
+          - entity: binary_sensor.parent_b_schedule_needs_review

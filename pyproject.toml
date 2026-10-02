@@ -1,0 +1,48 @@
+[project]
+name = "family-departures"
+version = "0.1.0"
+description = "Home Assistant integration that plans family departures for school and work."
+readme = "README.md"
+requires-python = ">=3.14.2"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest-homeassistant-custom-component==0.13.367",
+    "ruff",
+    "mypy",
+    "freezegun",
+    "ical==14.1.1",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+src = ["custom_components", "tests", "scripts"]
+# Only lint/format Python sources. Do not reformat Python code blocks embedded
+# in Markdown (the spec and docs are not ours to restyle).
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "W",
+    "ASYNC",
+]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unused_configs = true
+warn_return_any = true
+ignore_missing_imports = true
+packages = ["custom_components"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,105 @@
+# Service descriptions for the Family Departures integration (spec §14).
+# Field names mirror the voluptuous schemas in services.py.
+
+refresh:
+  fields:
+    person_id:
+      required: false
+      example: kid_a
+      selector:
+        text:
+
+mark_departed:
+  fields:
+    person_id:
+      required: true
+      example: kid_a
+      selector:
+        text:
+    plan_id:
+      required: true
+      example: "kid_a:2026-10-01:morning"
+      selector:
+        text:
+
+set_override:
+  fields:
+    person_id:
+      required: true
+      example: parent_b
+      selector:
+        text:
+    date:
+      required: true
+      example: "2026-10-02"
+      selector:
+        date:
+    mode:
+      required: false
+      selector:
+        select:
+          options:
+            - public_transport
+            - car
+            - static
+    attendance:
+      required: false
+      selector:
+        select:
+          options:
+            - normal
+            - "off"
+            - remote
+            - sick
+    arrival_time:
+      required: false
+      example: "08:30:00"
+      selector:
+        time:
+
+clear_override:
+  fields:
+    person_id:
+      required: true
+      example: parent_b
+      selector:
+        text:
+    date:
+      required: true
+      example: "2026-10-02"
+      selector:
+        date:
+
+get_alternatives:
+  fields:
+    person_id:
+      required: true
+      example: kid_a
+      selector:
+        text:
+
+select_journey:
+  fields:
+    person_id:
+      required: true
+      example: kid_a
+      selector:
+        text:
+    plan_id:
+      required: true
+      example: "kid_a:2026-10-01:morning"
+      selector:
+        text:
+    journey_id:
+      required: true
+      example: trip-123
+      selector:
+        text:
+
+reopen_today:
+  fields:
+    person_id:
+      required: true
+      example: kid_a
+      selector:
+        text:

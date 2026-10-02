@@ -1,0 +1,120 @@
+# Example channel scripts for the Family Departures integration (spec §12.2–§12.4).
+#
+# The integration's dispatcher calls `script.turn_on` on the script you map to a
+# profile's channel in the options flow, passing the notification intent as the
+# script's variables (see §12.2). These are *examples*: copy them into your
+# `scripts.yaml` (or the UI), change `notify.mobile_app_...` to the real target
+# for each phone, and map them per profile/channel.
+#
+# Variables the dispatcher provides (spec §12.2):
+#   person_id, plan_id, revision, notification_id, kind, severity, title,
+#   message, recommended_leave_time, latest_leave_time (ISO-8601 UTC or null),
+#   quality, reason_codes (list), packing_items (list), channels (list),
+#   tag (stable per mission), action_nonce.
+#
+# Nothing secret is passed: no ICS URLs, tokens, coordinates or raw calendar
+# text. Keep it that way in your own scripts (spec §12.4).
+#
+# Android only: `live_update` and the chronometer need Android 16+. On older
+# phones the plain status push below is the fallback; set the
+# `android_live_update` input_boolean per phone to turn the richer rendering on.
+
+# ---------------------------------------------------------------------------
+# Push channel – actionable status push with optional Live Update.
+# ---------------------------------------------------------------------------
+fd_push_parent_a:
+  alias: "Family Departures push – Parent A"
+  # Queued so a burst of intents for the same phone is delivered in order and
+  # one never cancels another (spec §12.2).
+  mode: queued
+  max: 10
+  fields:
+    title:
+      description: Notification title (Android always requires one).
+    message:
+      description: Notification body.
+    tag:
+      description: Stable per-mission tag so updates replace the old notice.
+    kind:
+      description: Notification kind (leave_now, reminder, cleanup, ...).
+    action_nonce:
+      description: Nonce bound to the mission; echoed back in button actions.
+    packing_items:
+      description: Still-pending packing items (may be empty).
+  sequence:
+    - variables:
+        # Everything after the first "departure_" segment is the mission id;
+        # the dispatcher's buttons encode "<PREFIX>|<mission_id>|<nonce>".
+        mission_id: "{{ tag | replace('departure_', '') }}"
+        # Live Update only where the phone supports it (Android 16+). Flip the
+        # input_boolean per phone; default off = plain status push fallback.
+        use_live_update: >-
+          {{ is_state('input_boolean.fd_live_update_parent_a', 'on') }}
+        # Privacy mode hides schedule details late in the evening / on request.
+        privacy: >-
+          {{ is_state('input_boolean.fd_privacy_mode', 'on') }}
+        body: >-
+          {% if privacy %}Dags att gå, öppna HA för detaljer.
+          {%- else %}{{ message }}
+          {%- if packing_items %} · Packa: {{ packing_items | join(', ') }}{% endif %}
+          {%- endif %}
+    - choose:
+        # Departure confirmed / day off: clear the Live Update and stop.
+        - conditions:
+            - "{{ kind == 'cleanup' }}"
+          sequence:
+            - action: notify.mobile_app_parent_a_telefon
+              data:
+                message: clear_notification
+                data:
+                  tag: "{{ tag }}"
+      # Normal case: an actionable push, optionally rendered as a Live Update.
+      default:
+        - action: notify.mobile_app_parent_a_telefon
+          data:
+            title: "{{ title }}"
+            message: "{{ body }}"
+            data:
+              tag: "{{ tag }}"
+              # Harmless on phones that ignore it; enables Live Update on 16+.
+              live_update: "{{ use_live_update }}"
+              # Chronometer counts down locally instead of per-second pushes.
+              chronometer: true
+              # Importance follows severity so quiet info does not buzz.
+              importance: >-
+                {{ 'high' if kind in ['leave_now', 'critical'] else 'default' }}
+              actions: >-
+                {% set acts = [
+                  {'action': 'FD_DEPARTED|' ~ mission_id ~ '|' ~ action_nonce,
+                   'title': 'Jag går nu'},
+                  {'action': 'FD_OFF|' ~ mission_id ~ '|' ~ action_nonce,
+                   'title': 'Ledig idag'}
+                ] %}
+                {% if packing_items %}
+                  {% set acts = acts + [
+                    {'action': 'FD_PACKED|' ~ mission_id ~ '|' ~ action_nonce,
+                     'title': 'Packat'}
+                  ] %}
+                {% endif %}
+                {{ acts }}
+
+# ---------------------------------------------------------------------------
+# Family-chat channel – bundled text only, no per-mission countdowns (§12.4).
+# ---------------------------------------------------------------------------
+fd_family_chat:
+  alias: "Family Departures – family chat"
+  mode: queued
+  max: 10
+  fields:
+    title:
+      description: Short title.
+    message:
+      description: Body text.
+    severity:
+      description: info / warning.
+  sequence:
+    # Bind this to your chat system's documented HA integration. Example only.
+    - action: notify.family_chat
+      data:
+        title: "{{ title }}"
+        message: "{{ message }}"

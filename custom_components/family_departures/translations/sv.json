@@ -1,0 +1,323 @@
+{
+  "title": "Family Departures",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Family Departures",
+        "description": "Konfigurera hushållet för avgångsplanering.",
+        "data": {
+          "household_name": "Hushållets namn",
+          "home_location": "Hemkoordinater"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Family Departures är redan konfigurerad."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Family Departures",
+        "menu_options": {
+          "add_profile": "Lägg till profil",
+          "edit_profile": "Ändra profil",
+          "remove_profile": "Ta bort profil",
+          "settings": "Notisinställningar"
+        }
+      },
+      "settings": {
+        "title": "Notisinställningar",
+        "description": "Under utveckling kan alla notiser skickas till ett enda testscript.",
+        "data": {
+          "dry_run": "Torrkörning (logga endast, anropa inte script)",
+          "test_recipient_script": "Testmottagarens script"
+        }
+      },
+      "edit_profile": {
+        "title": "Välj profil",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "remove_profile": {
+        "title": "Ta bort profil",
+        "data": {
+          "profile_id": "Profil"
+        }
+      },
+      "remove_confirm": {
+        "title": "Ta bort profil",
+        "description": "Att ta bort profilen raderar dess inställningar, den sparade schemalänken och alla dess entiteter. Detta kan inte ångras."
+      },
+      "profile_source": {
+        "title": "Schemakälla",
+        "description": "ICS-länken innehåller en personlig token och lagras säkert. Lämna tom för att behålla sparad länk.",
+        "data": {
+          "name": "Visningsnamn",
+          "source_type": "Källtyp",
+          "ics_url": "ICS-länk",
+          "calendar_entity_id": "Kalenderentitet",
+          "exclude_patterns": "Exkludera mönster (kommaseparerat)",
+          "include_patterns": "Inkludera mönster (kommaseparerat)"
+        }
+      },
+      "profile_destination": {
+        "title": "Destination och färdsätt",
+        "description": "Kollektivtrafikmarginaler visas även när standardfärdsättet är bil.",
+        "data": {
+          "destination_location": "Destination",
+          "default_mode": "Standardfärdsätt",
+          "static_minutes": "Statisk restid (cykel/gång, dörr till dörr)",
+          "static_label": "Etikett för statiskt färdsätt",
+          "weather_adjust": "Lägg väderpåslag på den statiska tiden",
+          "car_fallback_minutes": "Reservtid för bil (min)"
+        }
+      },
+      "profile_margins": {
+        "title": "Marginaler och förväntade dagar",
+        "data": {
+          "is_adult": "Vuxen (sätter standardmarginal för ankomst till 0)",
+          "arrival": "Ankomstmarginal (min)",
+          "departure": "Hemmarginal (min)",
+          "boarding": "Påstigningsmarginal (min)",
+          "parking_and_walk": "Parkering och gång efter bil (min)",
+          "min_transfer": "Minsta bytesmarginal (min)",
+          "weekday_mask": "Förväntade aktivitetsdagar"
+        }
+      },
+      "profile_packing": {
+        "title": "Packregel",
+        "description": "Valfritt. En delsträng i rubriken som ger en packrad. {preview}",
+        "data": {
+          "packing_match": "Rubrikmatchning (skiftlägesokänslig)",
+          "packing_item": "Sak att packa"
+        }
+      },
+      "profile_notifications": {
+        "title": "Notiser och kanaler",
+        "description": "Kanalscript är valfria så att profiler utan telefon ändå kan konfigureras.",
+        "data": {
+          "quiet_start": "Tyst tid börjar",
+          "quiet_end": "Tyst tid slutar",
+          "notifications_enabled": "Notiser aktiverade",
+          "evening_notice_enabled": "Kvällssammanfattning aktiverad",
+          "change_threshold_minutes": "Ändringströskel (min)",
+          "person_entity_id": "Personentitet (närvaro)",
+          "script_push": "Push-script",
+          "script_tts": "TTS-script",
+          "script_family_chat": "Familjechatt-script"
+        }
+      },
+      "profile_test": {
+        "title": "Testberäkning",
+        "description": "{summary}"
+      }
+    },
+    "error": {
+      "ics_required": "En ICS-länk krävs för denna källtyp.",
+      "calendar_required": "En kalenderentitet krävs för denna källtyp.",
+      "cannot_connect": "ICS-länken kunde inte hämtas.",
+      "invalid_calendar": "Svaret var inte en giltig kalender."
+    },
+    "abort": {
+      "no_profiles": "Inga profiler konfigurerade ännu."
+    },
+    "selector": {
+      "source_type": {
+        "options": {
+          "ics": "ICS-länk",
+          "ha_calendar": "Home Assistant-kalender"
+        }
+      },
+      "mode": {
+        "options": {
+          "public_transport": "Kollektivtrafik",
+          "car": "Bil",
+          "static": "Cykel/gång (statisk tid)"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_person": {
+      "message": "Ingen konfigurerad profil med namnet \"{person_id}\"."
+    },
+    "unknown_plan": {
+      "message": "Ingen aktuell plan med id \"{plan_id}\"."
+    },
+    "invalid_date": {
+      "message": "Datumet kunde inte tolkas."
+    }
+  },
+  "services": {
+    "refresh": {
+      "name": "Uppdatera",
+      "description": "Räkna om avgångsplaner, valfritt för en enskild person.",
+      "fields": {
+        "person_id": {
+          "name": "Person",
+          "description": "Profil-id att uppdatera. Lämna tomt för att uppdatera alla."
+        }
+      }
+    },
+    "mark_departed": {
+      "name": "Markera avrest",
+      "description": "Avsluta aktuell plan efter bekräftad avresa.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profil-id." },
+        "plan_id": {
+          "name": "Plan-id",
+          "description": "Aktuellt plan-id att avsluta."
+        }
+      }
+    },
+    "set_override": {
+      "name": "Ange dagsundantag",
+      "description": "Ändra färdsätt, närvaro eller ankomsttid för ett datum.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profil-id." },
+        "date": {
+          "name": "Datum",
+          "description": "Det lokala datum undantaget gäller."
+        },
+        "mode": {
+          "name": "Färdsätt",
+          "description": "Ändra dagens färdsätt."
+        },
+        "attendance": {
+          "name": "Närvaro",
+          "description": "Ändra dagens närvaro."
+        },
+        "arrival_time": {
+          "name": "Ankomsttid",
+          "description": "Ersätt dagens ankomstkrav (lokal tid)."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "Ta bort dagsundantag",
+      "description": "Ta bort ett dagsundantag.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profil-id." },
+        "date": {
+          "name": "Datum",
+          "description": "Det lokala datum vars undantag tas bort."
+        }
+      }
+    },
+    "get_alternatives": {
+      "name": "Hämta alternativ",
+      "description": "Returnera nåbara resor för aktuell plan.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profil-id." }
+      }
+    },
+    "select_journey": {
+      "name": "Välj resa",
+      "description": "Registrera en uttryckligen vald resa för aktuell plan.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profil-id." },
+        "plan_id": {
+          "name": "Plan-id",
+          "description": "Aktuellt plan-id."
+        },
+        "journey_id": {
+          "name": "Rese-id",
+          "description": "Resan att välja."
+        }
+      }
+    },
+    "reopen_today": {
+      "name": "Återöppna idag",
+      "description": "Återöppna dagens uppdrag efter att det stängts av en avresa.",
+      "fields": {
+        "person_id": { "name": "Person", "description": "Profil-id." }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "event_start": { "name": "Första aktivitetens start" },
+      "arrival_deadline": { "name": "Ankomstkrav" },
+      "recommended_leave_time": { "name": "Rekommenderad avgång" },
+      "latest_leave_time": { "name": "Senaste avgång" },
+      "predicted_arrival": { "name": "Beräknad ankomst" },
+      "travel_minutes": { "name": "Restid" },
+      "departure_status": {
+        "name": "Avgångsstatus",
+        "state": {
+          "no_event": "Ingen aktivitet",
+          "scheduled": "Planerad",
+          "preparing": "Förbereder",
+          "leave_now": "Gå nu",
+          "late": "Sen",
+          "departed": "Avrest",
+          "skipped": "Hoppad",
+          "cannot_arrive_on_time": "Hinner inte i tid",
+          "needs_configuration": "Behöver konfigureras"
+        }
+      },
+      "plan_quality": {
+        "name": "Plankvalitet",
+        "state": {
+          "realtime": "Realtid",
+          "scheduled": "Schemalagd",
+          "estimated": "Uppskattad",
+          "stale": "Inaktuell",
+          "unavailable": "Otillgänglig"
+        }
+      },
+      "route_summary": { "name": "Resväg" },
+      "packing_list": { "name": "Packlista" },
+      "packing_list_tomorrow": { "name": "Packlista imorgon" },
+      "default_transport": { "name": "Standardfärdsätt" }
+    },
+    "binary_sensor": {
+      "departure_disruption": { "name": "Resestörning" },
+      "schedule_needs_review": { "name": "Schema behöver kontrolleras" }
+    },
+    "select": {
+      "today_transport": {
+        "name": "Dagens färdsätt",
+        "state": {
+          "default": "Standard",
+          "public_transport": "Kollektivtrafik",
+          "car": "Bil",
+          "static": "Cykel/gång (statisk tid)"
+        }
+      },
+      "today_attendance": {
+        "name": "Dagens närvaro",
+        "state": {
+          "normal": "Normal",
+          "off": "Ledig",
+          "remote": "Distans",
+          "sick": "Sjuk"
+        }
+      }
+    },
+    "switch": {
+      "departure_notifications": { "name": "Avgångsnotiser" }
+    },
+    "button": {
+      "ack_packing": { "name": "Kvittera packlista" },
+      "refresh_departure": { "name": "Uppdatera avgång" },
+      "mark_departed": { "name": "Markera avrest" }
+    }
+  },
+  "issues": {
+    "invalid_source": {
+      "title": "Schemakällan för {profile} kan inte användas",
+      "description": "Schemakällan för {profile} kunde inte sättas upp ({reason}). Öppna integrationens inställningar och ange ett giltigt ICS-flöde eller en kalenderentitet för profilen."
+    },
+    "missing_destination": {
+      "title": "Destination saknas för {profile}",
+      "description": "{profile} saknar destinationskoordinater, så ingen restid kan beräknas. Öppna integrationens inställningar och ange destinationens plats för profilen."
+    },
+    "repeated_fetch_failure": {
+      "title": "Schemakällan för {profile} misslyckas upprepade gånger",
+      "description": "Schemat för {profile} kunde inte hämtas {failures} gånger i rad (senaste fel: {error_code}). Kontrollera att flödet går att nå; det senast cachade schemat används tills det fungerar igen."
+    }
+  }
+}
