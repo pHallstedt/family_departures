@@ -130,7 +130,9 @@ class FamilyDeparturesConfigFlow(ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(DATA_HOUSEHOLD_NAME, default="Familjen"): str,
+                vol.Required(
+                    DATA_HOUSEHOLD_NAME, default="Familjen"
+                ): selector.TextSelector(),
                 vol.Required("home_location"): selector.LocationSelector(),
             }
         )
@@ -342,7 +344,7 @@ class FamilyDeparturesOptionsFlow(OptionsFlow):
         default_source = self._draft.get("source_type", "ics")
         schema = vol.Schema(
             {
-                vol.Required("name", default=default_name): str,
+                vol.Required("name", default=default_name): selector.TextSelector(),
                 vol.Required(
                     "source_type", default=default_source
                 ): selector.SelectSelector(
@@ -367,11 +369,11 @@ class FamilyDeparturesOptionsFlow(OptionsFlow):
                 vol.Optional(
                     "exclude_patterns",
                     default=_join_patterns(self._draft.get("exclude_patterns", ())),
-                ): str,
+                ): selector.TextSelector(),
                 vol.Optional(
                     "include_patterns",
                     default=_join_patterns(self._draft.get("include_patterns", ())),
-                ): str,
+                ): selector.TextSelector(),
             }
         )
         return self.async_show_form(
@@ -429,7 +431,7 @@ class FamilyDeparturesOptionsFlow(OptionsFlow):
                 vol.Optional(
                     "static_label",
                     description={"suggested_value": self._draft.get("static_label")},
-                ): str,
+                ): selector.TextSelector(),
                 vol.Required(
                     "weather_adjust",
                     default=self._draft.get("weather_adjust", False),
@@ -535,11 +537,11 @@ class FamilyDeparturesOptionsFlow(OptionsFlow):
                 vol.Optional(
                     "packing_match",
                     default=_first_rule_field(self._draft, "match"),
-                ): str,
+                ): selector.TextSelector(),
                 vol.Optional(
                     "packing_item",
                     default=_first_rule_field(self._draft, "item"),
-                ): str,
+                ): selector.TextSelector(),
             }
         )
         return self.async_show_form(

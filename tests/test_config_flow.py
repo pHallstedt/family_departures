@@ -26,6 +26,7 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -84,6 +85,43 @@ async def test_single_instance_only(hass: HomeAssistant) -> None:
     )
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+def _assert_schema_renderable(schema: Any) -> None:
+    """Every field must serialize to something the frontend can render.
+
+    A bare Python ``str`` type serializes to ``cv.UNSUPPORTED`` via
+    ``voluptuous-serialize``; the frontend then draws an empty dialog with a
+    dead Submit button. Each field must instead carry a selector.
+    """
+    for key, value in schema.schema.items():
+        serialized = cv.custom_serializer(value)
+        assert serialized is not cv.UNSUPPORTED, (
+            f"field {key} serializes to UNSUPPORTED and will not render"
+        )
+
+
+async def test_user_form_schema_is_frontend_renderable(hass: HomeAssistant) -> None:
+    """The user step's schema must render in the frontend (no UNSUPPORTED fields).
+
+    This guards the empty-form / dead-Submit regression: a bare ``str`` field
+    serializes to ``UNSUPPORTED`` and the dialog shows no inputs. It fails
+    against the pre-fix schema and passes once ``household_name`` is a selector.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    _assert_schema_renderable(schema)
+    # household_name specifically must now carry a text selector.
+    serialized = {
+        str(key): cv.custom_serializer(value) for key, value in schema.schema.items()
+    }
+    household = serialized[DATA_HOUSEHOLD_NAME]
+    assert isinstance(household, dict)
+    assert "selector" in household
+    assert "text" in household["selector"]
 
 
 # ---------------------------------------------------------------------------
@@ -568,3 +606,63 @@ async def test_zero_profiles_entry_loads_no_missions(hass: HomeAssistant) -> Non
 
     coordinator = entry.runtime_data
     assert coordinator.data == {}
+
+
+# ---------------------------------------------------------------------------
+# Options flow: forms are frontend-renderable (guards the bare-str fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_options_forms_are_frontend_renderable(hass: HomeAssistant) -> None:
+    """The options forms that used bare ``str`` fields must render too.
+
+    Walks the add-profile flow to ``profile_source`` and ``profile_packing``
+    and asserts neither schema contains an UNSUPPORTED field.
+    """
+    entry = await _setup_entry(hass)
+
+    flow_id = await _open_add_profile(hass, entry)
+    source = await hass.config_entries.options.async_init(entry.entry_id)
+    # The profile_source form is already shown by _open_add_profile; re-fetch
+    # its schema by driving a fresh add flow and inspecting the result.
+    source = await hass.config_entries.options.async_configure(
+        source["flow_id"], {"next_step_id": "add_profile"}
+    )
+    assert source["step_id"] == "profile_source"
+    _assert_schema_renderable(source["data_schema"])
+
+    # Advance the first flow to the packing step and check it too.
+    await _submit_source(
+        hass,
+        flow_id,
+        {
+            "name": "Parent B",
+            "source_type": "ha_calendar",
+            "calendar_entity_id": "calendar.parent_b",
+        },
+    )
+    await hass.config_entries.options.async_configure(
+        flow_id,
+        {
+            "destination_location": {
+                "latitude": 59.4,
+                "longitude": 18.1,
+                "radius": 50,
+            },
+            "default_mode": "car",
+            "weather_adjust": False,
+        },
+    )
+    packing = await hass.config_entries.options.async_configure(
+        flow_id,
+        {
+            "arrival": 0,
+            "departure": 5,
+            "boarding": 2,
+            "parking_and_walk": 3,
+            "min_transfer": 5,
+            "weekday_mask": ["0", "1", "2", "3", "4"],
+        },
+    )
+    assert packing["step_id"] == "profile_packing"
+    _assert_schema_renderable(packing["data_schema"])
