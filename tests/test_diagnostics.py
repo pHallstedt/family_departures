@@ -346,7 +346,7 @@ async def test_repeated_fetch_failures_raise_and_clear_issue(
 
     with _patch_factories({"kid_a": schedule}):
         await _setup(hass, entry)
-        coordinator = entry.runtime_data
+        coordinator = entry.runtime_data.coordinator
         # Setup did one successful fetch: no issue yet.
         assert reg.async_get_issue(DOMAIN, issue_id) is None
 

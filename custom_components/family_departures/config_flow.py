@@ -59,6 +59,7 @@ from .const import (
     DEFAULT_BOARDING_MARGIN,
     DEFAULT_CHANGE_THRESHOLD_MINUTES,
     DEFAULT_DEPARTURE_MARGIN,
+    DEFAULT_DRY_RUN,
     DEFAULT_MIN_TRANSFER_MARGIN,
     DEFAULT_PARKING_WALK_MARGIN,
     DOMAIN,
@@ -201,7 +202,7 @@ class FamilyDeparturesOptionsFlow(OptionsFlow):
         current_script = options.get(OPT_TEST_RECIPIENT_SCRIPT)
         schema_dict: dict[Any, Any] = {
             vol.Required(
-                OPT_DRY_RUN, default=options.get(OPT_DRY_RUN, True)
+                OPT_DRY_RUN, default=options.get(OPT_DRY_RUN, DEFAULT_DRY_RUN)
             ): selector.BooleanSelector(),
         }
         script_selector = selector.EntitySelector(

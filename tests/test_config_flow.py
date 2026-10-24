@@ -646,7 +646,7 @@ async def test_zero_profiles_entry_loads_no_missions(hass: HomeAssistant) -> Non
     assert entry.state is ConfigEntryState.LOADED
     assert entry.options[OPT_PROFILES] == {}
 
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     assert coordinator.data == {}
 
 

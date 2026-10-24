@@ -62,6 +62,10 @@ Manual install: copy `custom_components/family_departures/` into your HA
      a child profile can be fully configured before that child has a phone.
    - **Evening summary:** on by default. When off, the profile gets a
      packing-only notice at 20:00 instead of the full evening summary.
+     Tomorrow's preliminary plan and the `packing_list_tomorrow` sensor are
+     computed from 18:00, and the evening notice fires at 20:00. Tomorrow's
+     plan only ever sends that evening (or packing) notice; change alerts for
+     a trip start on the trip's own day.
    - **Test calculation:** the final step shows a sample calculation (car and
      transit) so you can sanity-check the profile.
 3. **Holidays and days off.** Create a shared Local Calendar and add all-day
@@ -101,8 +105,11 @@ overrides and the notification on/off toggle.
 
 Before trusting live reminders, run the integration in shadow mode:
 
-1. Enable the global **dry run** option. The dispatcher then only logs and fires
-   the `family_departures_notification` event; no channel scripts are called.
+1. The global **dry run** option is **on by default**, also when you have never
+   saved Configure → Settings. The dispatcher then only logs and fires the
+   `family_departures_notification` event; no channel scripts are called. While
+   it is on, setup logs one INFO line saying so. To go live, open Configure →
+   Settings and turn dry run off.
 2. Set a global **test recipient** script (a single phone, e.g. your own phone).
    While it is set, every notification for every person is routed only to that
    script, titles are prefixed `[TEST <Name>]`, and the per-person tag keeps the

@@ -31,10 +31,10 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Create the notification switch for every configured profile."""
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     async_add_entities(
         _NotificationsSwitch(coordinator, entry, profile_id)
-        for profile_id in coordinator.data
+        for profile_id in coordinator.profile_configs
     )
 
 

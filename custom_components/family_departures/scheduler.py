@@ -25,7 +25,17 @@ What it does (spec §11.1 timing, §11.3 timers/restart):
 * On start it performs restart catch-up: it recomputes against the stored plans
   and only re-sends a missed "go now" within two minutes if the trip is still
   reachable; otherwise the policy's own ``cannot_arrive_on_time``/change path
-  applies and no stale "go now" is sent (spec §11.3).
+  applies and no stale "go now" is sent (spec §11.3). The same stale filter
+  (:func:`_drop_stale`) runs on every path, so a setup late in the day never
+  sends a "morning" or "go now" for a mission that is already over.
+* Tomorrow's preview plan (published by the coordinator from 18:00) is treated
+  as one more mission, which is what the 20:00 evening/packing notice is
+  evaluated against (spec §5.5, §12.1). Only those two kinds are sent for it.
+* A new coordinator round is evaluated right away, not only on the next tick,
+  so a round that moves the departure earlier past ``now`` still gets its
+  "go now" out before ``latest_leave``.
+* The previous round's plan is kept per mission and passed to ``evaluate`` so
+  an earlier departure can alert once it is stable over two rounds (§12.1).
 * ``async_shutdown`` cancels every timer and the local tick so unload/reload
   leaves nothing behind (spec §11.3).
 
@@ -40,7 +50,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HassJob, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_point_in_utc_time,
     async_track_time_interval,
@@ -58,6 +68,11 @@ from .models import (
 )
 from .notification_policy import (
     EVENING_HOUR,
+    KIND_CLEANUP,
+    KIND_EVENING,
+    KIND_LEAVE_NOW,
+    KIND_MORNING,
+    KIND_PACKING,
     MORNING_LEAD_MINUTES,
     REMINDER_LEAD_MINUTES,
     evaluate,
@@ -106,6 +121,14 @@ class NotificationScheduler:
         self._cancel_tick: Callable[[], None] | None = None
         self._cancel_listener: Callable[[], None] | None = None
         self._shutdown = False
+        # The plan published in the latest round and the one before it, per
+        # mission. ``evaluate`` needs the previous round's plan to tell a
+        # stable improvement from a one-off blip (spec §12.1). ``plan.revision``
+        # is the config revision and does not change per round, so rounds are
+        # told apart by plan object identity instead. After a restart one more
+        # round is needed before an improvement can alert.
+        self._last_plan: dict[str, DeparturePlan] = {}
+        self._previous_plan: dict[str, DeparturePlan] = {}
 
     # -- Lifecycle ----------------------------------------------------------
 
@@ -121,10 +144,17 @@ class NotificationScheduler:
             self._handle_coordinator_update
         )
         now = dt_util.utcnow()
+        self._note_round(self._current_plans())
         await self._async_catch_up(now)
         self._rearm_all(now)
+        # ``cancel_on_shutdown`` lets HA drop the tick on shutdown like its own
+        # timers; unload still cancels it explicitly in ``async_shutdown``.
         self._cancel_tick = async_track_time_interval(
-            self._hass, self._async_local_tick, LOCAL_TICK_INTERVAL
+            self._hass,
+            self._async_local_tick,
+            LOCAL_TICK_INTERVAL,
+            name="family_departures notification tick",
+            cancel_on_shutdown=True,
         )
 
     async def async_shutdown(self) -> None:
@@ -141,6 +171,8 @@ class NotificationScheduler:
             self._cancel_tick()
             self._cancel_tick = None
         self._cancel_all_timers()
+        self._last_plan.clear()
+        self._previous_plan.clear()
 
     # -- Coordinator hook ---------------------------------------------------
 
@@ -154,14 +186,54 @@ class NotificationScheduler:
         """
         if self._shutdown:
             return
-        self._rearm_all(dt_util.utcnow())
+        plans = self._current_plans()
+        self._note_round(plans)
+        now = dt_util.utcnow()
+        self._rearm_all(now)
+        # Evaluate the new round right away instead of waiting up to 60 s for
+        # the tick: a round that moves the departure earlier past ``now`` may
+        # leave only a minute or two before ``latest_leave`` (spec §11.3).
+        self._hass.async_create_task(
+            self._async_evaluate_all(now),
+            "family_departures evaluate new round",
+            eager_start=False,
+        )
+
+    async def _async_evaluate_all(self, now: datetime) -> None:
+        """Evaluate every current mission once (ledger keeps this idempotent)."""
+        if self._shutdown:
+            return
+        for mission_id in list(self._current_plans()):
+            await self._async_evaluate_mission(mission_id, now)
+
+    def _note_round(self, plans: dict[str, DeparturePlan]) -> None:
+        """Shift last → previous for every mission whose plan object changed."""
+        for mission_id, plan in plans.items():
+            last = self._last_plan.get(mission_id)
+            if plan is last:
+                continue
+            if last is not None:
+                self._previous_plan[mission_id] = last
+            self._last_plan[mission_id] = plan
+        for mission_id in list(self._last_plan):
+            if mission_id not in plans:
+                self._last_plan.pop(mission_id)
+                self._previous_plan.pop(mission_id, None)
 
     # -- Timer arming -------------------------------------------------------
 
     def _current_plans(self) -> dict[str, DeparturePlan]:
-        """The plans published for today, keyed by mission id."""
+        """Today's plans plus tomorrow's preview plans, keyed by mission id.
+
+        Tomorrow's preview (published from 18:00) is what the 20:00 evening and
+        packing notices are evaluated against (spec §5.5, §12.1). Today's plan
+        is inserted last so it wins on a mission id clash.
+        """
         data = self._coordinator.data or {}
         plans: dict[str, DeparturePlan] = {}
+        for result in data.values():
+            if result.tomorrow_plan is not None:
+                plans[result.tomorrow_plan.mission_id] = result.tomorrow_plan
         for result in data.values():
             if result.plan is not None:
                 plans[result.plan.mission_id] = result.plan
@@ -194,7 +266,11 @@ class NotificationScheduler:
             cancels.append(
                 async_track_point_in_utc_time(
                     self._hass,
-                    self._make_point_callback(plan.mission_id),
+                    HassJob(
+                        self._make_point_callback(plan.mission_id),
+                        "family_departures mission timer",
+                        cancel_on_shutdown=True,
+                    ),
                     when,
                 )
             )
@@ -230,10 +306,7 @@ class NotificationScheduler:
         restart) and relies on the ledger to stay idempotent, so it never
         duplicates a notice an exact point timer already sent.
         """
-        if self._shutdown:
-            return
-        for mission_id in list(self._current_plans()):
-            await self._async_evaluate_mission(mission_id, now)
+        await self._async_evaluate_all(now)
 
     # -- Evaluation + ledger ------------------------------------------------
 
@@ -258,12 +331,19 @@ class NotificationScheduler:
             return
 
         intents = evaluate(
-            previous=None,
+            previous=self._previous_plan.get(mission_id),
             current=plan,
             state=state,
             packing=self._packing_for(plan),
             profile=profile,
             now=now,
+        )
+        intents = _drop_stale(
+            intents,
+            plan,
+            now,
+            catch_up=False,
+            previous=self._previous_plan.get(mission_id),
         )
         if not intents:
             return
@@ -332,35 +412,103 @@ class NotificationScheduler:
                 continue
 
             intents = evaluate(
-                previous=None,
+                previous=self._previous_plan.get(mission_id),
                 current=plan,
                 state=state,
                 packing=self._packing_for(plan),
                 profile=profile,
                 now=now,
             )
-            intents = [
-                intent for intent in intents if self._catch_up_allows(intent, plan, now)
-            ]
+            intents = _drop_stale(intents, plan, now, catch_up=True)
             if not intents:
                 continue
             self._record_sent(state, intents, plan, now)
             await self._dispatch(intents)
 
-    def _catch_up_allows(
-        self, intent: NotificationIntent, plan: DeparturePlan, now: datetime
-    ) -> bool:
-        """Whether a catch-up intent may still be sent after a restart.
 
-        Only ``leave_now`` is gated: a stale "go now" is suppressed unless the
-        recommended departure is within the catch-up window and the plan is
-        still feasible (spec §11.3). Every other kind is left to the ledger.
-        """
-        if intent.kind != "leave_now":
-            return True
-        if plan.recommended_leave is None or not plan.feasible:
-            return False
-        return now - plan.recommended_leave <= CATCH_UP_LEAVE_NOW_WINDOW
+# ---------------------------------------------------------------------------
+# Stale-notice filter (pure)
+# ---------------------------------------------------------------------------
+
+
+def _drop_stale(
+    intents: list[NotificationIntent],
+    plan: DeparturePlan,
+    now: datetime,
+    *,
+    catch_up: bool,
+    previous: DeparturePlan | None = None,
+) -> list[NotificationIntent]:
+    """Drop notices that are no longer useful at ``now`` (spec §10, §11.3).
+
+    Applied on every path (point timer, local tick and restart catch-up) so a
+    setup or restart late in the day never sends a stale "morning" or "go now"
+    for a mission whose departure has long passed:
+
+    * a mission for a later day (tomorrow's preview) only gets the evening or
+      packing notice; its preliminary plan follows evening traffic, so change
+      and critical alerts wait for the trip's own day (spec §5.5, §12.1);
+    * past the mission timeout (``event_start + 60 min``) only ``cleanup`` is
+      still sent;
+    * ``morning`` is dropped once the recommended departure has passed;
+    * ``leave_now`` is kept within :data:`CATCH_UP_LEAVE_NOW_WINDOW` after the
+      recommended departure. On restart catch-up it also requires the trip to
+      be feasible; otherwise the policy's late/disruption path covers it;
+    * on the live path ``leave_now`` is also kept past that window when this
+      round moved the departure earlier past ``now`` while the trip is still on
+      time (``now <= latest_leave``): e.g. at 07:50 a round moves 07:55 → 07:46
+      with latest 07:51. A "go now" missed during downtime is not resurrected
+      this way, because then the departure did not move past ``now`` in a
+      round the scheduler saw.
+
+    In normal operation nothing is dropped: the point timers fire exactly at
+    the thresholds and the tick within 60 s of them.
+    """
+    if plan.requirement.local_date > now.astimezone(TZ).date():
+        return [i for i in intents if i.kind in (KIND_EVENING, KIND_PACKING)]
+
+    timeout = plan.requirement.event_start + timedelta(minutes=MISSION_TIMEOUT_MINUTES)
+    rec = plan.recommended_leave
+    kept: list[NotificationIntent] = []
+    for intent in intents:
+        if intent.kind == KIND_CLEANUP:
+            kept.append(intent)
+            continue
+        if now > timeout:
+            continue
+        if intent.kind == KIND_MORNING and rec is not None and now >= rec:
+            continue
+        if intent.kind == KIND_LEAVE_NOW:
+            if rec is None:
+                continue
+            if catch_up:
+                if now - rec > CATCH_UP_LEAVE_NOW_WINDOW or not plan.feasible:
+                    continue
+            elif now - rec > CATCH_UP_LEAVE_NOW_WINDOW and not _moved_past_now(
+                previous, plan, now
+            ):
+                continue
+        kept.append(intent)
+    return kept
+
+
+def _moved_past_now(
+    previous: DeparturePlan | None, plan: DeparturePlan, now: datetime
+) -> bool:
+    """True if this round moved the departure earlier past ``now`` while on time.
+
+    The previous round's departure was not yet stale (within the go-now window
+    of ``now``), the new one is earlier, and the trip is still on time.
+    """
+    rec = plan.recommended_leave
+    prev_rec = previous.recommended_leave if previous is not None else None
+    if rec is None or prev_rec is None or plan.latest_leave is None:
+        return False
+    return (
+        prev_rec > rec
+        and now - prev_rec <= CATCH_UP_LEAVE_NOW_WINDOW
+        and now <= plan.latest_leave
+    )
 
 
 # ---------------------------------------------------------------------------

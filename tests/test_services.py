@@ -268,7 +268,7 @@ async def test_services_removed_on_last_unload(hass: HomeAssistant) -> None:
 async def test_refresh_all_and_single(hass: HomeAssistant) -> None:
     """refresh works with and without a person_id (spec §14)."""
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
 
     with patch.object(
         coordinator, "async_request_refresh", wraps=coordinator.async_request_refresh
@@ -297,7 +297,7 @@ async def test_refresh_unknown_person_raises(hass: HomeAssistant) -> None:
 async def test_mark_departed_closes_mission(hass: HomeAssistant) -> None:
     """mark_departed confirms the departure for the current plan (spec §10)."""
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     plan = coordinator.data["kid_a"].plan
     assert plan is not None
 
@@ -335,7 +335,7 @@ async def test_mark_departed_wrong_plan_raises(hass: HomeAssistant) -> None:
 async def test_set_override_writes_future_day(hass: HomeAssistant) -> None:
     """set_override stores a mode override for a future date (spec §14)."""
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     future = TODAY + timedelta(days=3)
 
     await hass.services.async_call(
@@ -359,7 +359,7 @@ async def test_set_override_arrival_time_is_local(hass: HomeAssistant) -> None:
     date (spec §14).
     """
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     summer_day = date(2026, 7, 1)  # CEST, UTC+2
 
     await hass.services.async_call(
@@ -385,7 +385,7 @@ async def test_set_override_arrival_time_is_local(hass: HomeAssistant) -> None:
 async def test_clear_override_removes_the_day(hass: HomeAssistant) -> None:
     """clear_override drops a stored override so the day uses defaults."""
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     future = TODAY + timedelta(days=2)
 
     await hass.services.async_call(
@@ -463,7 +463,7 @@ async def test_get_alternatives_unknown_person_raises(hass: HomeAssistant) -> No
 async def test_select_journey_records_choice(hass: HomeAssistant) -> None:
     """select_journey records the chosen journey on the stored plan (spec §14)."""
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     plan = coordinator.data["kid_a"].plan
     assert plan is not None
 
@@ -508,7 +508,7 @@ async def test_select_journey_wrong_plan_raises(hass: HomeAssistant) -> None:
 async def test_reopen_today_unlocks_departed_mission(hass: HomeAssistant) -> None:
     """reopen_today sets the reopened flag so changes take effect again (§5.3)."""
     entry = await _setup_transit(hass)
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     plan = coordinator.data["kid_a"].plan
     assert plan is not None
 

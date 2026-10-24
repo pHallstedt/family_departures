@@ -108,7 +108,7 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: FamilyDeparturesConfigEntry
 ) -> dict[str, Any]:
     """Return redacted diagnostics for one config entry (spec §15)."""
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
 
     data: CoordinatorData = coordinator.data or {}
     profiles = [_profile_diagnostics(result) for result in data.values()]

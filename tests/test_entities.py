@@ -391,7 +391,7 @@ async def test_change_today_transport_recomputes(hass: HomeAssistant) -> None:
         await hass.async_block_till_done()
 
     # The override is stored for today and the plan is now a car plan.
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     override = coordinator._store.get_override("parent_b", TODAY)
     assert override is not None
     assert override.mode == "car"
@@ -415,7 +415,7 @@ async def test_mark_departed_closes_mission(hass: HomeAssistant) -> None:
         )
         await hass.async_block_till_done()
 
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     mission = coordinator._store.get_mission(make_mission_id("kid_a", TODAY))
     assert mission is not None
     assert mission.status == "departed"
@@ -437,7 +437,7 @@ async def test_ack_packing_acknowledges_items(hass: HomeAssistant) -> None:
         )
         await hass.async_block_till_done()
 
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     acks = coordinator._store.get_packing_acks("kid_a", TODAY)
     assert "Gympakläder" in acks
 

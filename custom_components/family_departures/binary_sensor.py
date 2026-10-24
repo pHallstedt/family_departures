@@ -45,9 +45,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Create the binary sensors for every configured profile."""
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     entities: list[BinarySensorEntity] = []
-    for profile_id in coordinator.data:
+    for profile_id in coordinator.profile_configs:
         entities.append(
             _DisruptionBinarySensor(coordinator, entry.entry_id, profile_id)
         )

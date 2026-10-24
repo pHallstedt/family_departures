@@ -24,8 +24,10 @@ fails the others (spec §15):
 5. Persist the plan and mission state through the versioned Store and expose
    the per-profile result for the entity layer (T14).
 
-A separate, lighter pass computes *tomorrow's* preliminary plan and stores it
-as a preview without replacing today's published plan (spec §11.1).
+From :data:`TOMORROW_PREVIEW_START` (18:00 local) each round also computes
+*tomorrow's* schedule, packing list and preliminary plan and attaches them to
+the profile's result as a preview, without replacing today's published plan
+(spec §5.5, §11.1). The scheduler uses it for the 20:00 evening notice.
 
 Staleness guard (spec §11.2): every plan carries the ``config_revision`` that
 was current when the round started. A result produced for an old revision is
@@ -44,7 +46,7 @@ import logging
 import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -91,7 +93,7 @@ from .providers.sl_journey import SlJourneyProvider
 from .providers.waze import WazeCarProvider
 from .schedule import select_requirement
 from .store import FamilyDeparturesStore
-from .timeutil import local_date_of
+from .timeutil import TZ, local_date_of
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,6 +119,12 @@ MAX_CONCURRENT_EXTERNAL_CALLS = 2
 # A mission's timers (and polling) stop at the latest 60 min after the event
 # starts (spec §10); used to decide a round is no longer "active".
 MISSION_TIMEOUT_MINUTES = 60
+
+# From this local time every round also computes tomorrow's preliminary plan
+# and packing list (spec §5.5, §11.1). The coordinator polls at least every
+# 30 min (``IDLE_UPDATE_INTERVAL``), so several rounds run before the 20:00
+# evening notice and its timer is always armed in time.
+TOMORROW_PREVIEW_START = time(18, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +204,12 @@ class ProfileResult:
     the coordinator uses to persist the round *after* the staleness guard (spec
     §11.2); the entity layer only reads ``profile``/``outcome``/``plan``/
     ``packing``.
+
+    The ``tomorrow_*`` fields carry tomorrow's preliminary preview. They are
+    only set from :data:`TOMORROW_PREVIEW_START` local time and never drive
+    today's sensors (spec §11.1); the scheduler uses ``tomorrow_plan`` for the
+    20:00 evening/packing notice and ``packing_list_tomorrow`` reads
+    ``tomorrow_packing`` (spec §5.5).
     """
 
     profile: ProfileConfig
@@ -206,6 +220,19 @@ class ProfileResult:
     schedule: ScheduleResult
     previous_state: MissionState | None = None
     tomorrow_plan: DeparturePlan | None = None
+    tomorrow_packing: PackingList | None = None
+    tomorrow_schedule: ScheduleResult | None = None
+    tomorrow_state: MissionState | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _TomorrowPreview:
+    """Tomorrow's schedule, packing list and preliminary plan for one profile."""
+
+    schedule: ScheduleResult
+    packing: PackingList
+    plan: DeparturePlan | None
+    state: MissionState | None
 
 
 @dataclass(slots=True)
@@ -319,6 +346,16 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """The revision in force now; stamped onto every plan this round."""
         return self._config_revision
 
+    @property
+    def profile_configs(self) -> dict[str, ProfileConfig]:
+        """Every configured, buildable profile keyed by id.
+
+        Unlike ``data`` this includes a profile whose last round failed, so the
+        entity platforms create its entities (shown unavailable until a round
+        succeeds) and the dispatcher can still resolve its scripts (spec §15).
+        """
+        return {pid: runtime.config for pid, runtime in self._runtimes.items()}
+
     def _load_profiles(self) -> None:
         """(Re)build per-profile runtime from the entry, bumping the revision.
 
@@ -326,6 +363,8 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
         whose source cannot be built (e.g. an ICS profile with no URL yet) is
         skipped with a warning rather than failing the whole entry, so a
         profile can be half-configured while the others work (spec §15).
+        Such a profile intentionally gets no entities; it is surfaced as an
+        ``invalid_source`` Repairs issue instead.
         """
         self._config_revision += 1
         home = self._home_coords()
@@ -526,9 +565,31 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._store.set_schedule(
                 config.destination_id, result.local_date, result.schedule
             )
+            # The mission state is re-read here rather than taken from the
+            # round's start: the scheduler may have recorded a notice (or the
+            # user confirmed a departure) while the round awaited its providers,
+            # and a stale snapshot would wipe that ledger entry and resend.
             if result.plan is not None:
-                self._persist_mission(result.plan, result.previous_state, now)
+                self._persist_mission(
+                    result.plan, self._store.get_mission(result.plan.mission_id), now
+                )
                 self._store.set_plan(result.plan)
+            # Tomorrow's preview (evening rounds only): the scheduler needs the
+            # schedule for the packing list and a mission state for the ledger
+            # and the action nonce of the evening notice (spec §5.5, §11.3).
+            if result.tomorrow_schedule is not None:
+                self._store.set_schedule(
+                    config.destination_id,
+                    result.local_date + timedelta(days=1),
+                    result.tomorrow_schedule,
+                )
+            if result.tomorrow_plan is not None:
+                self._persist_mission(
+                    result.tomorrow_plan,
+                    self._store.get_mission(result.tomorrow_plan.mission_id),
+                    now,
+                )
+                self._store.set_plan(result.tomorrow_plan)
         self._store.async_schedule_save()
 
     async def _process_profile(
@@ -543,10 +604,9 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
             async with runtime.lock:
                 return await self._plan_profile(runtime, today, now, revision)
         except Exception:  # noqa: BLE001 - isolate one profile's failure
-            _LOGGER.exception(
-                "Failed to update profile %s; other profiles continue",
-                runtime.config.id,
-            )
+            # Generic at ERROR; the name-derived profile id only at DEBUG.
+            _LOGGER.exception("Failed to update a profile; other profiles continue")
+            _LOGGER.debug("Profile update failed for %s", runtime.config.id)
             return None
 
     async def _plan_profile(
@@ -598,25 +658,20 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._store.get_packing_acks(config.id, today),
         )
 
-        if outcome.requirement is None:
-            # No mission today: nothing to plan, but the outcome/packing still
-            # drive the dashboard texts (spec §5.4).
-            return ProfileResult(
-                profile=config,
-                outcome=outcome,
-                plan=None,
-                packing=packing,
-                local_date=today,
-                schedule=result,
-                previous_state=state,
+        plan: DeparturePlan | None = None
+        if outcome.requirement is not None:
+            # 2. Travel data + plan for the effective mode. Persistence is
+            #    deferred to ``_persist_round`` so a stale round cannot write to
+            #    the store. With no mission today there is nothing to plan, but
+            #    the outcome/packing still drive the dashboard texts (§5.4).
+            plan = await self._plan_for_mode(
+                runtime, mode, outcome.requirement, state, now, revision
             )
+            plan = replace(plan, config_revision=revision)
 
-        # 2. Travel data + plan for the effective mode. Persistence is deferred
-        #    to ``_persist_round`` so a stale round cannot write to the store.
-        plan = await self._plan_for_mode(
-            runtime, mode, outcome.requirement, state, now, revision
-        )
-        plan = replace(plan, config_revision=revision)
+        # 3. Tomorrow's preview in the evening, also on a day without a mission
+        #    today (e.g. Sunday evening before Monday, spec §5.5, §11.1).
+        preview = await self._evening_preview(runtime, today, now, revision)
 
         return ProfileResult(
             profile=config,
@@ -626,7 +681,37 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
             local_date=today,
             schedule=result,
             previous_state=state,
+            tomorrow_plan=preview.plan if preview is not None else None,
+            tomorrow_packing=preview.packing if preview is not None else None,
+            tomorrow_schedule=preview.schedule if preview is not None else None,
+            tomorrow_state=preview.state if preview is not None else None,
         )
+
+    async def _evening_preview(
+        self,
+        runtime: _ProfileRuntime,
+        today: date,
+        now: datetime,
+        revision: int,
+    ) -> _TomorrowPreview | None:
+        """Tomorrow's preview from :data:`TOMORROW_PREVIEW_START`, else ``None``.
+
+        A preview failure is logged (profile id at DEBUG only) and never drops
+        today's result (spec §15).
+        """
+        if now.astimezone(TZ).time() < TOMORROW_PREVIEW_START:
+            return None
+        try:
+            return await self._preview_profile(
+                runtime, today + timedelta(days=1), now, revision
+            )
+        except Exception:  # noqa: BLE001 - the preview is best effort
+            # Profile ids are slugs of display names (often a child's name),
+            # so the id is only logged at DEBUG (privacy rule: no person id
+            # at INFO+).
+            _LOGGER.exception("Failed to compute tomorrow preview for a profile")
+            _LOGGER.debug("Tomorrow preview failed for profile %s", runtime.config.id)
+            return None
 
     async def _fetch_schedule(
         self, runtime: _ProfileRuntime, d: date, now: datetime
@@ -788,16 +873,23 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
         for runtime in self._runtimes.values():
             try:
                 async with runtime.lock:
-                    plan = await self._preview_profile(runtime, tomorrow, now, revision)
+                    preview = await self._preview_profile(
+                        runtime, tomorrow, now, revision
+                    )
             except Exception:  # noqa: BLE001 - one preview failing is non-fatal
-                _LOGGER.exception(
-                    "Failed to compute tomorrow preview for %s", runtime.config.id
+                _LOGGER.exception("Failed to compute tomorrow preview for a profile")
+                _LOGGER.debug(
+                    "Tomorrow preview failed for profile %s", runtime.config.id
                 )
                 continue
-            if plan is not None:
-                previews[plan.mission_id] = plan
+            if revision == self._config_revision:
+                self._store.set_schedule(
+                    runtime.config.destination_id, tomorrow, preview.schedule
+                )
+            if preview.plan is not None:
+                previews[preview.plan.mission_id] = preview.plan
                 if revision == self._config_revision:
-                    self._store.set_plan(plan)
+                    self._store.set_plan(preview.plan)
         return previews
 
     async def _preview_profile(
@@ -806,23 +898,38 @@ class FamilyDeparturesCoordinator(DataUpdateCoordinator[CoordinatorData]):
         d: date,
         now: datetime,
         revision: int,
-    ) -> DeparturePlan | None:
-        """Build tomorrow's preliminary plan for one profile, or ``None``."""
+    ) -> _TomorrowPreview:
+        """Build tomorrow's schedule, packing list and preliminary plan.
+
+        Nothing is written to the store here; the caller persists the preview
+        after its own staleness check (spec §11.2).
+        """
         config = runtime.config
         override = self._store.get_override(config.id, d)
         mode = _effective_mode(config, override)
+        state = self._store.get_mission(_mission_id_for(config.id, d))
 
         result = await self._fetch_schedule(runtime, d, now)
-        self._store.set_schedule(config.destination_id, d, result)
         outcome = select_requirement(
-            config, d, result, override, False, None, None, now
+            config, d, result, override, False, None, state, now
         )
-        if outcome.requirement is None:
-            return None
-        plan = await self._plan_for_mode(
-            runtime, mode, outcome.requirement, None, now, revision
+        packing = build_packing_list(
+            config.id,
+            d,
+            result.events,
+            config.packing_rules,
+            override,
+            self._store.get_packing_acks(config.id, d),
         )
-        return replace(plan, config_revision=revision)
+        plan: DeparturePlan | None = None
+        if outcome.requirement is not None:
+            plan = await self._plan_for_mode(
+                runtime, mode, outcome.requirement, state, now, revision
+            )
+            plan = replace(plan, config_revision=revision)
+        return _TomorrowPreview(
+            schedule=result, packing=packing, plan=plan, state=state
+        )
 
     # -- Reconfiguration hook ----------------------------------------------
 

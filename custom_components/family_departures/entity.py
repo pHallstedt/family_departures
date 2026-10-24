@@ -53,6 +53,11 @@ class FamilyDeparturesEntity(CoordinatorEntity[FamilyDeparturesCoordinator]):
         result = self.result
         if result is not None:
             return result.profile.name
+        # A profile whose first round failed still has its configuration, so
+        # the device gets the real display name rather than the raw id.
+        config = self.coordinator.profile_configs.get(self._profile_id)
+        if config is not None:
+            return config.name
         return self._profile_id
 
     @property
@@ -68,6 +73,7 @@ class FamilyDeparturesEntity(CoordinatorEntity[FamilyDeparturesCoordinator]):
         """A profile is available while the coordinator holds a result for it.
 
         A profile that failed its update round (dropped from the data map, spec
-        §15) goes unavailable without taking the others down.
+        §15), including its very first one, goes unavailable without taking the
+        others down and recovers on the next successful round without a reload.
         """
         return super().available and self.result is not None

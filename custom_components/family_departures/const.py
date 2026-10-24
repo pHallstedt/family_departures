@@ -30,6 +30,10 @@ DATA_ICS_URLS: Final = "ics_urls"
 OPT_PROFILES: Final = "profiles"
 OPT_DRY_RUN: Final = "dry_run"
 OPT_TEST_RECIPIENT_SCRIPT: Final = "test_recipient_script"
+# Dry run is on until the user explicitly turns it off under Configure →
+# Settings, also when Settings was never saved (README "Dry-run and shadow
+# mode"): a fresh install logs and fires hook events but calls no script.
+DEFAULT_DRY_RUN: Final = True
 
 # Travel modes offered in the UI (spec §2).
 MODE_PUBLIC_TRANSPORT: Final = "public_transport"

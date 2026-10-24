@@ -139,9 +139,9 @@ def _loaded_coordinators(
             continue
         if entry.state is not ConfigEntryState.LOADED:
             continue
-        coordinator = getattr(entry, "runtime_data", None)
-        if coordinator is not None:
-            coordinators.append(coordinator)
+        runtime = getattr(entry, "runtime_data", None)
+        if runtime is not None:
+            coordinators.append(runtime.coordinator)
     return coordinators
 
 

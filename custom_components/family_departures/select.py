@@ -44,9 +44,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Create the day-control selects for every configured profile."""
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     entities: list[SelectEntity] = []
-    for profile_id in coordinator.data:
+    for profile_id in coordinator.profile_configs:
         entities.append(_TransportSelect(coordinator, entry.entry_id, profile_id))
         entities.append(_AttendanceSelect(coordinator, entry.entry_id, profile_id))
     async_add_entities(entities)

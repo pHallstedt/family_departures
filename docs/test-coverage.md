@@ -25,7 +25,7 @@ listed; the end-to-end tests live in `tests/test_e2e_morning.py` (T21).
 | Dagens första SchoolSoft-lektion saknas i ny hämtning (UID borta) | `test_provider_ics.py::test_disappeared_uids`; `test_schedule.py::test_disappeared_first_lesson_moves_to_next_before_departure` | Flagged as possible cancellation |
 | `Lektion LUNCH` tidigast – exkluderas, nästa väljs | `test_provider_ics.py::test_lunch_excluded_by_default_filter` | |
 | Oförändrat flöde (samma hash) – ingen ny parsning/omberäkning | `test_provider_ics.py::test_unchanged_hash_skips_reparse` | |
-| Idrott som tredje lektion – "Gympakläder" i kvälls- och morgonnotis, avgång oförändrad | `test_packing.py::test_pe_as_third_lesson_yields_item`; `test_notification_policy.py::test_evening_includes_tomorrow_packing`; `test_e2e_morning.py::test_evening_summary_and_packing_fire_the_night_before` | |
+| Idrott som tredje lektion – "Gympakläder" i kvälls- och morgonnotis, avgång oförändrad | `test_packing.py::test_pe_as_third_lesson_yields_item`; `test_notification_policy.py::test_evening_includes_tomorrow_packing`; `test_e2e_morning.py::test_evening_summary_and_packing_fire_the_night_before`; `test_notification_wiring.py::test_evening_notice_fires_at_20_for_tomorrow_with_packing` | Wiring test: tomorrow preview from 18:00, evening at 20:00 via the real entry |
 | Två idrottslektioner samma dag – en rad i packlistan | `test_packing.py::test_two_pe_lessons_collapse_to_one_item` | |
 | Idrott tas bort efter kvällsnotisen – raden försvinner | `test_packing.py::test_removed_lesson_removes_item`, `::test_acknowledgement_trimmed_when_lesson_removed` | |
 | Packlista kvitterad, sedan 10-minuterspåminnelse – påminnelsen nämner den inte | `test_notification_policy.py::test_packing_absent_after_acknowledgement` | |
@@ -44,13 +44,24 @@ listed; the end-to-end tests live in `tests/test_e2e_morning.py` (T21).
 | Ingen resa kan ge ankomst i tid – sen ankomst utan falsk latest-on-time | `test_planner_transit.py::test_no_on_time_journey_shows_best_late`, `::test_empty_result_cannot_arrive`; `test_e2e_morning.py::test_no_journey_in_time_shows_late_without_false_on_time` | |
 | Waze-fel, tom rutt-lista eller icke-numerisk duration – validering och reservtid | `test_provider_waze.py::test_empty_route_list_is_none`, `::test_non_numeric_duration_is_none`, `::test_service_not_found_is_none`; `test_coordinator.py::test_car_falls_back_to_reserve_minutes`, `::test_car_without_fallback_needs_configuration` | Never travel time = 0 |
 | Byte av färdsätt i UI – gammalt svar/timer kan inte återställa föregående plan | `test_coordinator.py::test_today_override_mode_wins`, `::test_stale_revision_round_is_discarded`; `test_entities.py::test_change_today_transport_recomputes` | |
-| Små tidsändringar som totalt blir fyra minuter – varning mot senast meddelad tid | `test_notification_policy.py::test_small_changes_summing_past_threshold_alert`, `::test_change_below_threshold_is_silent` | Baseline = last notified leave |
-| Omstart kring 10-minutersvarning – ingen dubblett, rimlig catch-up | `test_scheduler.py::test_restart_near_reminder_catches_up_without_duplicate`, `::test_restart_within_window_resends_go_now_if_reachable`, `::test_restart_long_after_leave_now_suppresses_stale_go_now`; `test_e2e_morning.py::test_restart_near_reminder_catches_up_once` | |
+| Små tidsändringar som totalt blir fyra minuter – varning mot senast meddelad tid | `test_notification_policy.py::test_small_changes_summing_past_threshold_alert`, `::test_change_below_threshold_is_silent`; `test_scheduler.py::test_earlier_plan_alerts_only_when_stable_across_two_rounds`; `test_notification_wiring.py::test_earlier_departure_alerts_after_two_stable_rounds`, `::test_tomorrow_preview_sends_only_the_evening_notice` | Baseline = last notified leave; improvement needs two stable rounds. Tomorrow's preview only sends the evening/packing notice |
+| Omstart kring 10-minutersvarning – ingen dubblett, rimlig catch-up | `test_scheduler.py::test_restart_near_reminder_catches_up_without_duplicate`, `::test_restart_within_window_resends_go_now_if_reachable`, `::test_restart_long_after_leave_now_suppresses_stale_go_now`; `test_e2e_morning.py::test_restart_near_reminder_catches_up_once`; `test_scheduler.py::test_evening_start_sends_no_stale_notices_for_todays_finished_mission`, `::test_tick_does_not_send_go_now_long_after_departure_time`; `test_notification_wiring.py::test_go_now_missed_while_down_is_not_sent_late`, `::test_go_now_is_sent_when_a_round_moves_departure_past_now` | Stale filter on every path; a round that moves the departure past now while still on time still sends go-now |
 | "Jag går nu" från gårdagens notis – ingen effekt på dagens plan | `test_dispatcher.py::test_action_with_wrong_nonce_is_a_noop`, `::test_action_for_unknown_mission_is_a_noop` | Nonce bound to the mission |
 | Hemkomst vid lunch – dagens morgonuppdrag förblir avslutat | `test_schedule.py::test_locked_after_departure_keeps_first_event_despite_change`; `test_coordinator.py::test_confirmed_departure_not_reset` | |
 | Europe/Stockholm vid tidsomställning – korrekt datum och UTC/local | `test_timeutil.py::test_local_date_of_spring_forward_morning`, `::test_local_date_of_fall_back_morning`, `::test_local_day_bounds_spring_forward_is_23_hours`, `::test_local_day_bounds_fall_back_is_25_hours`, `::test_combine_local_dst_transition_day`; `test_services.py::test_set_override_arrival_time_is_local` | |
 | En kanalleverans misslyckas – dashboard och övriga kanaler fortsätter | `test_dispatcher.py::test_one_channel_failing_does_not_stop_the_others`, `::test_event_fired_with_intent_content` | |
-| Unload/reload – inga kvarvarande timers eller dubbla listeners | `test_init.py::test_reload_leaves_no_duplicate_listeners`; `test_entities.py::test_entities_unload_cleanly`; `test_scheduler.py::test_shutdown_leaves_no_timers`, `::test_dropped_mission_cancels_its_timers`; `test_e2e_morning.py::test_full_morning_transit_lifecycle` (final tick) | |
+| Unload/reload – inga kvarvarande timers eller dubbla listeners | `test_init.py::test_reload_leaves_no_duplicate_listeners`; `test_entities.py::test_entities_unload_cleanly`; `test_scheduler.py::test_shutdown_leaves_no_timers`, `::test_dropped_mission_cancels_its_timers`; `test_e2e_morning.py::test_full_morning_transit_lifecycle` (final tick); `test_notification_wiring.py::test_unload_and_reload_do_not_duplicate_or_leak_notifications` | Reload flushes the ledger, no resend |
+
+## Setup wiring
+
+`tests/test_notification_wiring.py` sets up a real config entry and proves the
+scheduler and dispatcher are started by `async_setup_entry`: the reminder at
+recommended −10 min fires the `family_departures_notification` event and calls
+the profile's mapped script (`::test_reminder_is_delivered_to_the_mapped_script`),
+dry run (on by default, also when Settings was never saved) fires the event but
+calls no script (`::test_dry_run_fires_event_but_calls_no_script`), and a profile that fails its first refresh still gets unavailable entities that
+recover without a reload
+(`::test_profile_failing_first_refresh_gets_entities_and_recovers`).
 
 ## §16 HA-integration tests (prose list)
 

@@ -63,9 +63,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Create the sensor set for every configured profile."""
-    coordinator = entry.runtime_data
+    coordinator = entry.runtime_data.coordinator
     entities: list[SensorEntity] = []
-    for profile_id in coordinator.data:
+    for profile_id in coordinator.profile_configs:
         entities.extend(
             [
                 _TimestampSensor(
@@ -295,8 +295,8 @@ class _PackingListSensor(_ProfileSensor):
 class _PackingListTomorrowSensor(_ProfileSensor):
     """Tomorrow's packing list for the evening view (spec §5.5).
 
-    Reads the tomorrow packing list carried on the result, falling back to an
-    empty string when no preview has been computed yet.
+    Reads the tomorrow packing list the coordinator attaches to the result from
+    18:00 local, falling back to an empty string before the preview exists.
     """
 
     def __init__(
@@ -319,20 +319,25 @@ class _PackingListTomorrowSensor(_ProfileSensor):
         items = self._tomorrow_items()
         if items is None:
             return None
-        return {"items": list(items)}
+        result = self.result
+        packing = result.tomorrow_packing if result is not None else None
+        acknowledged = packing.acknowledged if packing is not None else ()
+        return {"items": list(items), "acknowledged": list(acknowledged)}
 
     def _tomorrow_items(self) -> tuple[str, ...] | None:
-        """Tomorrow's packing items, or ``None`` while the profile is unavailable.
+        """Tomorrow's pending packing items, or ``None`` while unavailable.
 
-        The coordinator computes tomorrow's preview on a separate pass and does
-        not fold it into today's published result (spec §11.1: the preview never
-        drives today's sensors). Until a preview-backed packing list is wired
-        through, this reports an empty list for an otherwise-available profile
-        rather than a fabricated value.
+        The preview lives in its own ``tomorrow_packing`` field and never
+        changes today's sensors (spec §11.1). Before 18:00 there is no preview
+        yet, so an available profile reports an empty list rather than a
+        fabricated value.
         """
-        if self.result is None:
+        result = self.result
+        if result is None:
             return None
-        return ()
+        if result.tomorrow_packing is None:
+            return ()
+        return result.tomorrow_packing.items
 
 
 class _DefaultTransportSensor(_ProfileSensor):

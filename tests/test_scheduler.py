@@ -36,8 +36,11 @@ from custom_components.family_departures.models import (
     SourceFilter,
 )
 from custom_components.family_departures.notification_policy import (
+    KIND_CHANGE,
     KIND_LEAVE_NOW,
+    KIND_MORNING,
     KIND_REMINDER,
+    REASON_IMPROVEMENT,
 )
 from custom_components.family_departures.packing import build_packing_list
 from custom_components.family_departures.schedule import select_requirement
@@ -529,6 +532,104 @@ async def test_timeout_tick_evaluates_without_presence(
         await hass.async_block_till_done()
 
     assert KIND_LEAVE_NOW in dispatch.kinds
+
+    await scheduler.async_shutdown()
+
+
+async def test_earlier_plan_alerts_only_when_stable_across_two_rounds(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    """An earlier departure alerts once a second round confirms it (§12.1)."""
+    profile = _profile()
+    plan = _plan()
+    store.set_mission(_mission(plan))
+    coord = FakeCoordinator({"kid_a": _profile_result(profile, plan)})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+
+    start = REC_LOCAL - timedelta(hours=3)
+    earlier = REC_LOCAL - timedelta(minutes=10)
+    with freeze_time(start):
+        await scheduler.async_start()
+        coord.set_results(
+            {"kid_a": _profile_result(profile, _plan(recommended=earlier))}
+        )
+    tick = start + timedelta(seconds=60)
+    with freeze_time(tick):
+        async_fire_time_changed(hass, tick)
+        await hass.async_block_till_done()
+    assert KIND_CHANGE not in dispatch.kinds
+
+    # A new round (new plan object) with the same earlier time.
+    with freeze_time(tick):
+        coord.set_results(
+            {"kid_a": _profile_result(profile, _plan(recommended=earlier))}
+        )
+    tick2 = tick + timedelta(seconds=60)
+    with freeze_time(tick2):
+        async_fire_time_changed(hass, tick2)
+        await hass.async_block_till_done()
+
+    changes = [
+        intent
+        for batch in dispatch.batches
+        for intent in batch
+        if intent.kind == KIND_CHANGE
+    ]
+    assert len(changes) == 1
+    assert REASON_IMPROVEMENT in changes[0].reason_codes
+    assert changes[0].recommended_leave_time == earlier
+
+    await scheduler.async_shutdown()
+
+
+async def test_evening_start_sends_no_stale_notices_for_todays_finished_mission(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    """Starting at 19:00 sends no morning/go-now for this morning's trip."""
+    profile = _profile()
+    plan = _plan()
+    store.set_mission(_mission(plan))
+    coord = FakeCoordinator({"kid_a": _profile_result(profile, plan)})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+
+    start = combine_local(TODAY, datetime.min.time().replace(hour=19))
+    with freeze_time(start):
+        await scheduler.async_start()
+    for minutes in (1, 2):
+        at = start + timedelta(minutes=minutes)
+        with freeze_time(at):
+            async_fire_time_changed(hass, at)
+            await hass.async_block_till_done()
+
+    assert dispatch.batches == []
+
+    await scheduler.async_shutdown()
+
+
+async def test_tick_does_not_send_go_now_long_after_departure_time(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    """Ten minutes past departure the tick sends no stale go-now or morning."""
+    profile = _profile()
+    plan = _plan()
+    store.set_mission(_mission(plan))
+    coord = FakeCoordinator({"kid_a": _profile_result(profile, plan)})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+
+    start = REC_LOCAL + timedelta(minutes=10)
+    with freeze_time(start):
+        await scheduler.async_start()
+    for minutes in (11, 12):
+        at = REC_LOCAL + timedelta(minutes=minutes)
+        with freeze_time(at):
+            async_fire_time_changed(hass, at)
+            await hass.async_block_till_done()
+
+    assert KIND_LEAVE_NOW not in dispatch.kinds
+    assert KIND_MORNING not in dispatch.kinds
 
     await scheduler.async_shutdown()
 
