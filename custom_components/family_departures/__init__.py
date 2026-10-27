@@ -73,6 +73,7 @@ async def async_setup_entry(
         dry_run=_dry_run,
         test_recipient=_test_recipient,
         request_refresh=coordinator.async_request_refresh,
+        aliases=coordinator.attendee_aliases,
     )
     entry.async_on_unload(dispatcher.async_shutdown)
     dispatcher.async_start()
@@ -131,9 +132,27 @@ async def async_unload_entry(
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate an old config entry.
+    """Migrate an old config entry to the current schema (plan §3).
 
-    Version 1 is the first released schema, so there is nothing to migrate yet.
-    The hook exists so future schema changes have a home.
+    Version 1 stored one source + destination per profile. Version 2 reshapes
+    the entry into the household model: ``locations`` and ``calendars``
+    registries plus profiles that reference them through calendar links. The
+    migration is pure (``household.migrate_v1_to_v2``); the secret ICS URLs are
+    re-keyed from profile id to calendar id in memory only, never logged.
     """
+    from .household import migrate_v1_to_v2
+
+    if entry.version > 2:
+        # A downgrade: refuse rather than corrupt newer data.
+        return False
+    if entry.version == 1:
+        new_data, new_options = migrate_v1_to_v2(entry.data, entry.options)
+        hass.config_entries.async_update_entry(
+            entry,
+            data=new_data,
+            options=new_options,
+            version=2,
+            minor_version=1,
+        )
+        _LOGGER.debug("Migrated config entry to version 2")
     return True

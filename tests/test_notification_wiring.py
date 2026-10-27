@@ -36,9 +36,9 @@ from custom_components.family_departures.const import (
 )
 from custom_components.family_departures.coordinator import ProviderFactories
 from custom_components.family_departures.models import (
+    CalendarSource,
     DurationResult,
     JourneyResult,
-    ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
 )
@@ -142,8 +142,8 @@ def _patch_factories(
     car = car or _FakeCar(20)
     journey = _NoJourney()
 
-    def make_schedule(profile: ProfileConfig, ics_url: str | None) -> _FakeSchedule:
-        return schedules[profile.id]
+    def make_schedule(calendar: CalendarSource, ics_url: str | None) -> _FakeSchedule:
+        return schedules[calendar.id.removesuffix("_calendar")]
 
     def _factory(hass: HomeAssistant) -> ProviderFactories:
         return ProviderFactories(
@@ -278,6 +278,37 @@ async def test_reminder_is_delivered_to_the_mapped_script(
     assert reminder_calls[0].data["entity_id"] == PUSH_SCRIPT
 
 
+async def test_a_childs_notice_is_copied_to_the_parents_push_script(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """End to end: a kid without scripts copies to a parent (feature 7)."""
+    events = async_capture_events(hass, EVENT_NOTIFICATION)
+    calls = async_mock_service(hass, "script", "turn_on")
+    freezer.move_to(_local(TUESDAY, 6, 30))
+    kid = _profile_dict(
+        "kid_a", scripts={}, copy_to=["parent_b"], copy_kinds=["reminder"]
+    )
+    parent = _profile_dict("parent_b")
+    entry = _make_entry({"kid_a": kid, "parent_b": parent}, **{OPT_DRY_RUN: False})
+    schedules = {
+        "kid_a": _FakeSchedule({TUESDAY: "Lektion MA"}),
+        "parent_b": _FakeSchedule({}),
+    }
+    with _patch_factories(schedules):
+        await _setup(hass, entry)
+        await _advance(hass, freezer, _local(TUESDAY, 7, 45))
+
+    copies = [call.data for call in calls if call.data["variables"].get("is_copy")]
+    assert len(copies) == 1
+    assert copies[0]["entity_id"] == "script.fd_push_parent_b"
+    assert copies[0]["variables"]["title"] == "[Kopia] Kid_A – snart dags"
+    assert copies[0]["variables"]["kind"] == "reminder"
+    kid_events = [e.data for e in events if e.data["person_id"] == "kid_a"]
+    assert [e["copied_to"] for e in kid_events if e["kind"] == "reminder"] == [
+        ["parent_b"]
+    ]
+
+
 @pytest.mark.parametrize(
     "options",
     [{OPT_DRY_RUN: True}, {}],
@@ -367,10 +398,12 @@ async def test_evening_notice_fires_at_20_for_tomorrow_with_packing(
         assert events == []
         await _advance(hass, freezer, _local(MONDAY, 20, 0))
 
-    # Exactly the evening notice; nothing stale for Monday's finished mission.
+    # Exactly the day-before digest; nothing stale for Monday's finished mission.
     assert _kinds(events) == ["evening"]
     evening = events[0].data
-    assert evening["notification_id"].startswith("kid_a:2026-10-20:morning")
+    assert evening["notification_id"] == "kid_a:2026-10-20:day:evening"
+    assert evening["slot"] == "day"
+    assert evening["message"] == "08:20 Skola – gå 07:55\nPacka: Gympakläder"
     assert "Gympakläder" in evening["packing_items"]
     assert _script_kinds(calls) == ["evening"]
     assert calls[0].data["entity_id"] == PUSH_SCRIPT

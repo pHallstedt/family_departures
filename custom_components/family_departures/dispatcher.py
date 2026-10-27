@@ -52,6 +52,7 @@ from .const import (
     ACTION_DEPARTED,
     ACTION_OFF,
     ACTION_PACKED,
+    ACTION_SKIP,
     CHANNEL_TIMEOUT_SECONDS,
     EVENT_NOTIFICATION,
     MOBILE_APP_ACTION_EVENT,
@@ -62,6 +63,7 @@ from .models import (
     NotificationIntent,
     ProfileConfig,
 )
+from .notification_copies import copy_recipients
 from .store import FamilyDeparturesStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,6 +80,10 @@ ProfileLookup = Callable[[], Mapping[str, ProfileConfig]]
 # Callbacks reading the two global toggles live from the config entry so an
 # options change (which reloads the entry) always takes effect.
 BoolLookup = Callable[[], bool]
+
+# Resolves a profile's attendee aliases (needs ``hass.states``, so it lives in
+# the coordinator) for the shared-calendar attendee filter.
+AliasLookup = Callable[[ProfileConfig], frozenset[str]]
 ScriptLookup = Callable[[], str | None]
 
 # Dispatcher that triggers a coordinator recompute after an action changed state
@@ -98,7 +104,9 @@ class NotificationDispatcher:
         dry_run: BoolLookup,
         test_recipient: ScriptLookup,
         request_refresh: RefreshCallback | None = None,
+        aliases: AliasLookup | None = None,
     ) -> None:
+        self._aliases = aliases
         self._hass = hass
         self._store = store
         self._profiles = profiles
@@ -139,19 +147,75 @@ class NotificationDispatcher:
         """Fire the hook event and call every channel script for one intent."""
         # The hook event is always fired with the same content, even in dry-run,
         # and never carries a secret (spec §12.2).
-        self._hass.bus.async_fire(EVENT_NOTIFICATION, _event_data(intent))
+        # One hook event per original, listing who gets a copy, so automations
+        # do not double-fire.
+        source = self._profiles().get(intent.person_id)
+        recipients = (
+            copy_recipients(intent, source, self._profiles(), dt_util.utcnow())
+            if source is not None
+            else []
+        )
+        self._hass.bus.async_fire(
+            EVENT_NOTIFICATION,
+            {**_event_data(intent), "copied_to": [r.id for r in recipients]},
+        )
 
         if self._dry_run():
             _LOGGER.info(
-                "Dry-run: notification %s for %s (%s) not sent",
+                "Dry-run: notification %s for %s (%s) not sent, copies=%d",
                 intent.kind,
                 intent.person_id,
                 intent.mission_id,
+                len(recipients),
             )
             return
 
         for script_entity, variables in self._targets(intent):
             await self._async_call_channel(script_entity, variables, intent)
+        if source is not None:
+            for recipient in recipients:
+                for script_entity, variables in self._copy_targets(
+                    intent, source, recipient
+                ):
+                    await self._async_call_channel(script_entity, variables, intent)
+
+    def _copy_targets(
+        self,
+        intent: NotificationIntent,
+        source: ProfileConfig,
+        recipient: ProfileConfig,
+    ) -> list[tuple[str, dict[str, object]]]:
+        """The script call for one recipient's copy: their push script only.
+
+        TTS and family chat are not duplicated. The title is ``[Kopia] <title>``
+        (it already names the original person) and the tag is the original's, so
+        on the recipient's phone the copy is replaced by the next notice of that
+        mission and cleared by the copied ``cleanup``. In test-recipient mode the
+        copy goes to the test script as ``[TEST <recipient> ← <source>] …`` with a
+        tag per recipient.
+        """
+        variables = {
+            **_variables(intent, "push"),
+            "is_copy": True,
+            "copy_of_person_id": source.id,
+            "copy_of_name": source.name,
+            "recipient_person_id": recipient.id,
+            "title": f"[Kopia] {intent.title}",
+        }
+        test_script = self._test_recipient()
+        if test_script:
+            variables["title"] = (
+                f"[TEST {recipient.name} ← {source.name}] {intent.title}"
+            )
+            variables["tag"] = f"{intent.tag}_{recipient.id}"
+            return [(test_script, variables)]
+        script_entity = recipient.scripts.get("push")
+        if not script_entity:
+            _LOGGER.debug(
+                "No push script for copy recipient %s; skipping", recipient.id
+            )
+            return []
+        return [(script_entity, variables)]
 
     def _targets(
         self, intent: NotificationIntent
@@ -252,6 +316,10 @@ class NotificationDispatcher:
         if person_id is None or local_date is None:
             return False
 
+        if prefix in (ACTION_DEPARTED, ACTION_SKIP) and _is_digest(mission_id):
+            # The day-before digest is not a trip: nobody departs or skips it.
+            return False
+
         if prefix == ACTION_DEPARTED:
             if state.status == "departed":
                 return False
@@ -263,6 +331,13 @@ class NotificationDispatcher:
                     reopened=False,
                 )
             )
+            return True
+
+        if prefix == ACTION_SKIP:
+            # Skips exactly this mission; the person's other missions go on.
+            if state.status in ("departed", "skipped"):
+                return False
+            self._store.set_mission(replace(state, status="skipped"))
             return True
 
         if prefix == ACTION_OFF:
@@ -288,8 +363,12 @@ class NotificationDispatcher:
         profile = self._profiles().get(person_id)
         if profile is None:
             return
-        schedule = self._store.get_schedule(profile.destination_id, local_date)
-        events = schedule.events if schedule is not None else ()
+        # Read the profile's day across its calendar links from the shared cache
+        # (plan §4.1), replacing the old per-profile destination_id read.
+        from .day_events import profile_day_events
+
+        aliases = self._aliases(profile) if self._aliases is not None else frozenset()
+        events = profile_day_events(self._store, profile, local_date, aliases)
         # Lazy import keeps packing's purity boundary and avoids an import cycle.
         from .packing import build_packing_list
 
@@ -341,9 +420,11 @@ def _variables(intent: NotificationIntent, channel: str | None) -> dict[str, obj
         "quality": intent.quality,
         "reason_codes": list(intent.reason_codes),
         "packing_items": list(intent.packing_items),
+        "lunch_menu": intent.lunch_menu,
         "channels": list(intent.channels),
         "tag": intent.tag,
         "action_nonce": intent.action_nonce,
+        "slot": intent.slot,
     }
 
 
@@ -382,11 +463,16 @@ def _parse_action(raw: str) -> tuple[str, str, str] | None:
     if len(parts) != 3:
         return None
     prefix, mission_id, nonce = parts
-    if prefix not in (ACTION_DEPARTED, ACTION_PACKED, ACTION_OFF):
+    if prefix not in (ACTION_DEPARTED, ACTION_PACKED, ACTION_OFF, ACTION_SKIP):
         return None
     if not mission_id or not nonce:
         return None
     return prefix, mission_id, nonce
+
+
+def _is_digest(mission_id: str) -> bool:
+    """True for the ``person:date:day`` day-before digest mission."""
+    return mission_id.rsplit(":", 1)[-1] == "day"
 
 
 def _mission_person_date(mission_id: str) -> tuple[str | None, date | None]:

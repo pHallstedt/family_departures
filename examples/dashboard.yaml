@@ -56,6 +56,28 @@ views:
             name: Parent B
             secondary_info: last-updated
 
+      # Every mission of the day: the school morning plus extra calendars such
+      # as football practice. `slot` is "morning" for the main mission.
+      - type: markdown
+        title: Uppdrag idag
+        content: |-
+          {% set m = state_attr('sensor.kid_a_missions_today', 'missions') or [] %}
+          {% if m %}**Kid A**
+          {% for x in m %}- {{ (x.event_start | as_datetime | as_local).strftime('%H:%M') }} {{ x.label or 'Skola' }}{% if x.destination %} → {{ x.destination }}{% endif %}{% if x.recommended_leave_time %} – gå {{ (x.recommended_leave_time | as_datetime | as_local).strftime('%H:%M') }}{% endif %}{% if x.warnings %} ⚠ {{ x.warnings | join(', ') }}{% endif %}
+          {% endfor %}{% endif %}
+          {% set m = state_attr('sensor.kid_b_missions_today', 'missions') or [] %}
+          {% if m %}**Kid B**
+          {% for x in m %}- {{ (x.event_start | as_datetime | as_local).strftime('%H:%M') }} {{ x.label or 'Skola' }}{% if x.destination %} → {{ x.destination }}{% endif %}{% if x.recommended_leave_time %} – gå {{ (x.recommended_leave_time | as_datetime | as_local).strftime('%H:%M') }}{% endif %}{% if x.warnings %} ⚠ {{ x.warnings | join(', ') }}{% endif %}
+          {% endfor %}{% endif %}
+          {% set m = state_attr('sensor.parent_a_missions_today', 'missions') or [] %}
+          {% if m %}**Parent A**
+          {% for x in m %}- {{ (x.event_start | as_datetime | as_local).strftime('%H:%M') }} {{ x.label or 'Skola' }}{% if x.destination %} → {{ x.destination }}{% endif %}{% if x.recommended_leave_time %} – gå {{ (x.recommended_leave_time | as_datetime | as_local).strftime('%H:%M') }}{% endif %}{% if x.warnings %} ⚠ {{ x.warnings | join(', ') }}{% endif %}
+          {% endfor %}{% endif %}
+          {% set m = state_attr('sensor.parent_b_missions_today', 'missions') or [] %}
+          {% if m %}**Parent B**
+          {% for x in m %}- {{ (x.event_start | as_datetime | as_local).strftime('%H:%M') }} {{ x.label or 'Skola' }}{% if x.destination %} → {{ x.destination }}{% endif %}{% if x.recommended_leave_time %} – gå {{ (x.recommended_leave_time | as_datetime | as_local).strftime('%H:%M') }}{% endif %}{% if x.warnings %} ⚠ {{ x.warnings | join(', ') }}{% endif %}
+          {% endfor %}{% endif %}
+
       # ---- Kid A ------------------------------------------------------------
       - type: markdown
         title: Kid A – när ska jag gå?
@@ -210,6 +232,26 @@ views:
             name: Parent A
           - entity: sensor.parent_b_packing_list_tomorrow
             name: Parent B
+      - type: entities
+        title: Uppdrag imorgon
+        entities:
+          - entity: sensor.kid_a_missions_tomorrow
+            name: Kid A
+          - entity: sensor.kid_b_missions_tomorrow
+            name: Kid B
+          - entity: sensor.parent_a_missions_tomorrow
+            name: Parent A
+          - entity: sensor.parent_b_missions_tomorrow
+            name: Parent B
+      # The lunch sensor exists only for a profile with a lunch calendar set
+      # (for example the `skolmat` integration); drop the rows you do not have.
+      - type: entities
+        title: Lunch imorgon
+        entities:
+          - entity: sensor.kid_a_lunch_tomorrow
+            name: Kid A
+          - entity: sensor.kid_b_lunch_tomorrow
+            name: Kid B
 
   # -------------------------------------------------------------------------
   # Diagnostics -- source health per person, for troubleshooting (spec §15).

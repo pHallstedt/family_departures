@@ -15,6 +15,7 @@ events is ``status="empty"``, and anything else is ``status="ok"``.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Iterable
 from datetime import UTC, date, datetime
@@ -24,6 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
+from ..event_tags import parse_event_tags, strip_tags
 from ..models import ScheduleEvent, ScheduleResult, SourceFilter
 from ..timeutil import local_day_bounds
 
@@ -75,6 +77,60 @@ def _parse_bound(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+async def async_get_calendar_events(
+    hass: HomeAssistant,
+    entity_id: str,
+    start_utc: datetime,
+    end_utc: datetime,
+    source_id: str,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Call ``calendar.get_events`` for the window.
+
+    Returns ``(events, None)`` on success or ``(None, error_code)`` on
+    failure, so the caller can emit a ``status="error"`` result instead of
+    a misleading empty day (§5.3). An unavailable entity, a missing service
+    or any raised error are distinct failure modes. Shared by the schedule and
+    the lunch provider.
+    """
+    state = hass.states.get(entity_id)
+    if state is None or state.state == "unavailable":
+        _LOGGER.warning(
+            "Calendar entity %s unavailable for source %s", entity_id, source_id
+        )
+        return None, ERROR_UNAVAILABLE
+
+    try:
+        response = await hass.services.async_call(
+            CALENDAR_DOMAIN,
+            SERVICE_GET_EVENTS,
+            {
+                "entity_id": entity_id,
+                "start_date_time": start_utc,
+                "end_date_time": end_utc,
+            },
+            blocking=True,
+            return_response=True,
+        )
+    except HomeAssistantError as err:
+        _LOGGER.warning(
+            "calendar.get_events failed for source %s (%s): %s",
+            source_id,
+            entity_id,
+            type(err).__name__,
+        )
+        return None, ERROR_SERVICE
+
+    if not isinstance(response, dict):
+        return None, ERROR_RESPONSE
+    entity_data = response.get(entity_id)
+    if not isinstance(entity_data, dict):
+        return None, ERROR_RESPONSE
+    events = entity_data.get("events")
+    if not isinstance(events, list):
+        return None, ERROR_RESPONSE
+    return [event for event in events if isinstance(event, dict)], None
+
+
 class HaCalendarScheduleProvider:
     """Fetches one local day's events from a HA calendar entity."""
 
@@ -97,52 +153,10 @@ class HaCalendarScheduleProvider:
     async def _async_get_events(
         self, start_utc: datetime, end_utc: datetime
     ) -> tuple[list[dict[str, Any]] | None, str | None]:
-        """Call ``calendar.get_events`` for the window.
-
-        Returns ``(events, None)`` on success or ``(None, error_code)`` on
-        failure, so the caller can emit a ``status="error"`` result instead of
-        a misleading empty day (§5.3). An unavailable entity, a missing service
-        or any raised error are distinct failure modes.
-        """
-        state = self._hass.states.get(self._entity_id)
-        if state is None or state.state == "unavailable":
-            _LOGGER.warning(
-                "Calendar entity %s unavailable for source %s",
-                self._entity_id,
-                self._source_id,
-            )
-            return None, ERROR_UNAVAILABLE
-
-        try:
-            response = await self._hass.services.async_call(
-                CALENDAR_DOMAIN,
-                SERVICE_GET_EVENTS,
-                {
-                    "entity_id": self._entity_id,
-                    "start_date_time": start_utc,
-                    "end_date_time": end_utc,
-                },
-                blocking=True,
-                return_response=True,
-            )
-        except HomeAssistantError as err:
-            _LOGGER.warning(
-                "calendar.get_events failed for source %s (%s): %s",
-                self._source_id,
-                self._entity_id,
-                type(err).__name__,
-            )
-            return None, ERROR_SERVICE
-
-        if not isinstance(response, dict):
-            return None, ERROR_RESPONSE
-        entity_data = response.get(self._entity_id)
-        if not isinstance(entity_data, dict):
-            return None, ERROR_RESPONSE
-        events = entity_data.get("events")
-        if not isinstance(events, list):
-            return None, ERROR_RESPONSE
-        return [event for event in events if isinstance(event, dict)], None
+        """Call ``calendar.get_events`` for the window (see the module helper)."""
+        return await async_get_calendar_events(
+            self._hass, self._entity_id, start_utc, end_utc, self._source_id
+        )
 
     async def async_get_day(
         self, d: date, *, now: datetime | None = None
@@ -163,7 +177,10 @@ class HaCalendarScheduleProvider:
         exclude = self._filter.exclude_patterns
         include = self._filter.include_patterns
 
-        events: list[ScheduleEvent] = []
+        # Collect accepted events first, then sort by start so the
+        # same-summary occurrence suffixes (-2, -3, …) follow start order
+        # (plan §4.4).
+        accepted: list[tuple[datetime, datetime, str, str | None, str | None]] = []
         for item in raw:
             raw_start = item.get("start")
             raw_end = item.get("end")
@@ -180,6 +197,29 @@ class HaCalendarScheduleProvider:
                 continue
             if include and not _matches_any(summary, include):
                 continue
+            location = item.get("location")
+            description = item.get("description")
+            accepted.append(
+                (
+                    start,
+                    end,
+                    summary,
+                    str(location) if location is not None else None,
+                    str(description) if description is not None else None,
+                )
+            )
+
+        accepted.sort(key=lambda e: e[0])
+
+        events: list[ScheduleEvent] = []
+        summary_counts: dict[str, int] = {}
+        for start, end, summary, location, description in accepted:
+            # Raw DESCRIPTION is parsed for known override tags only and never
+            # kept (plan §5.3, §10). LOCATION is retained raw (capped) for the
+            # opt-in alias match and never geocoded.
+            tags = parse_event_tags(summary, description)
+            summary_key = strip_tags(summary).casefold()
+            summary_counts[summary_key] = summary_counts.get(summary_key, 0) + 1
             events.append(
                 ScheduleEvent(
                     uid=_event_uid(summary, start),
@@ -187,10 +227,14 @@ class HaCalendarScheduleProvider:
                     start=start,
                     end=end,
                     source_id=self._source_id,
+                    location=location,
+                    tags=tags,
+                    occurrence_key=_occurrence_key(
+                        summary_key, summary_counts[summary_key]
+                    ),
                 )
             )
 
-        events.sort(key=lambda e: e.start)
         return ScheduleResult(
             status="ok" if events else "empty",
             events=tuple(events),
@@ -218,11 +262,33 @@ class HaCalendarScheduleProvider:
         return False
 
 
+def _occurrence_key(summary_key: str, nth: int) -> str:
+    """Stable per-occurrence key for a HA calendar event (plan §4.4, U8).
+
+    ``get_events`` exposes no UID, so the key is ``sha1`` of the tag-stripped,
+    casefolded summary, truncated to 10 hex characters. The ``nth`` same-summary
+    event of the day (in start order) gets a ``-2``, ``-3``, … suffix. Moving a
+    single event's time keeps its key (the day in the mission id separates
+    days); renaming creates a new mission and drops the old one.
+
+    Known limit of this UID-less API: the ``nth`` suffix follows start order, so
+    moving one of several same-summary events past another swaps their keys and
+    each mission inherits the other's ledger.
+    """
+    digest = hashlib.sha1(summary_key.encode()).hexdigest()[:10]
+    if nth > 1:
+        return f"{digest}-{nth}"
+    return digest
+
+
 def _event_uid(summary: str, start: datetime) -> str:
     """Synthesise a stable UID for a HA calendar event.
 
     ``calendar.get_events`` omits the UID from its list response, so a stable
     key is derived from the summary and UTC start. This is sufficient for
-    first-event selection and disappearance detection within a single day.
+    first-event selection and disappearance detection within a single day. Two
+    same-summary events starting together share this UID (their
+    ``occurrence_key`` still differs), so disappearance detection cannot tell
+    them apart.
     """
     return f"{start.isoformat()}|{summary}"

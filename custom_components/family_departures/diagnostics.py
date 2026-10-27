@@ -36,6 +36,8 @@ TO_REDACT: set[str] = {
     "home_lon",
     "dest_lat",
     "dest_lon",
+    "lat",
+    "lon",
     "latitude",
     "longitude",
     "name",
@@ -48,6 +50,13 @@ TO_REDACT: set[str] = {
     "route_summary",
     "ics_url",
     "url",
+    "aliases",
+    "label",
+    "location",
+    "tags",
+    "lunch_calendar_entity_id",
+    "dishes",
+    "lunch_menu",
 }
 
 
@@ -83,10 +92,12 @@ def _profile_diagnostics(result: ProfileResult) -> dict[str, Any]:
     so :data:`TO_REDACT` scrubs it rather than silently dropping the field.
     """
     config = result.profile
+    main_link = config.main_link
     return {
         "id": config.id,
         "name": config.name,
-        "source_type": config.source_type,
+        "link_count": len(config.calendar_links),
+        "main_calendar_id": main_link.calendar_id if main_link is not None else None,
         "default_mode": config.default_mode,
         "weekday_mask": sorted(config.weekday_mask),
         "notifications_enabled": config.notifications_enabled,
@@ -114,8 +125,8 @@ async def async_get_config_entry_diagnostics(
     profiles = [_profile_diagnostics(result) for result in data.values()]
 
     source_health = {
-        destination_id: health.as_diagnostics()
-        for destination_id, health in coordinator.source_health().items()
+        calendar_id: health.as_diagnostics()
+        for calendar_id, health in coordinator.source_health().items()
     }
 
     diagnostics: dict[str, Any] = {
@@ -127,7 +138,7 @@ async def async_get_config_entry_diagnostics(
             "options": async_redact_data(dict(entry.options), TO_REDACT),
         },
         "config_revision": coordinator.config_revision,
-        "profile_count": len(coordinator.source_health()),
+        "profile_count": len(data),
         "profiles": profiles,
         "source_health": source_health,
         "invalid_sources": coordinator.invalid_sources,

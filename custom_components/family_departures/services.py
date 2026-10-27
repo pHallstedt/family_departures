@@ -66,6 +66,7 @@ SERVICE_REOPEN_TODAY = "reopen_today"
 ATTR_PERSON_ID = "person_id"
 ATTR_DATE = "date"
 ATTR_PLAN_ID = "plan_id"
+ATTR_SLOT = "slot"
 ATTR_JOURNEY_ID = "journey_id"
 ATTR_MODE = "mode"
 ATTR_ATTENDANCE = "attendance"
@@ -100,7 +101,12 @@ _CLEAR_OVERRIDE_SCHEMA = vol.Schema(
     }
 )
 
-_GET_ALTERNATIVES_SCHEMA = vol.Schema({vol.Required(ATTR_PERSON_ID): cv.string})
+_GET_ALTERNATIVES_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_PERSON_ID): cv.string,
+        vol.Optional(ATTR_PLAN_ID): cv.string,
+    }
+)
 
 _SELECT_JOURNEY_SCHEMA = vol.Schema(
     {
@@ -110,7 +116,12 @@ _SELECT_JOURNEY_SCHEMA = vol.Schema(
     }
 )
 
-_REOPEN_TODAY_SCHEMA = vol.Schema({vol.Required(ATTR_PERSON_ID): cv.string})
+_REOPEN_TODAY_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_PERSON_ID): cv.string,
+        vol.Optional(ATTR_SLOT, default="morning"): cv.string,
+    }
+)
 
 # All service names, used when removing on the last unload.
 _ALL_SERVICES = (
@@ -162,6 +173,20 @@ def _find_profile(hass: HomeAssistant, person_id: str) -> FamilyDeparturesCoordi
     )
 
 
+def _plan_by_id(result: Any, plan_id: str) -> Any:
+    """The plan with ``plan_id`` among a profile's missions today, else ``None``.
+
+    Looks across every mission of the day (the main one and each extra event),
+    not only the active one, so a service can address any of them.
+    """
+    if result is None:
+        return None
+    candidates = [m.plan for m in result.missions]
+    if result.plan is not None:
+        candidates.append(result.plan)
+    return next((p for p in candidates if p.plan_id == plan_id), None)
+
+
 def _require_date(call: ServiceCall) -> date:
     """Return the ``date`` field, already parsed to a :class:`date` by cv.date."""
     value = call.data[ATTR_DATE]
@@ -197,9 +222,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
         person_id = call.data[ATTR_PERSON_ID]
         plan_id = call.data[ATTR_PLAN_ID]
         coordinator = _find_profile(hass, person_id)
-        result = coordinator.data.get(person_id)
-        plan = result.plan if result is not None else None
-        if plan is None or plan.plan_id != plan_id:
+        plan = _plan_by_id(coordinator.data.get(person_id), plan_id)
+        if plan is None:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_plan",
@@ -260,7 +284,17 @@ def async_setup_services(hass: HomeAssistant) -> None:
         person_id = call.data[ATTR_PERSON_ID]
         coordinator = _find_profile(hass, person_id)
         result = coordinator.data.get(person_id)
-        plan = result.plan if result is not None else None
+        plan_id = call.data.get(ATTR_PLAN_ID)
+        if plan_id is not None:
+            plan = _plan_by_id(result, plan_id)
+            if plan is None:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="unknown_plan",
+                    translation_placeholders={"plan_id": plan_id},
+                )
+        else:
+            plan = result.plan if result is not None else None
         return {"person_id": person_id, "alternatives": _alternatives_for(plan)}
 
     async def _async_select_journey(call: ServiceCall) -> None:
@@ -269,9 +303,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
         plan_id = call.data[ATTR_PLAN_ID]
         journey_id = call.data[ATTR_JOURNEY_ID]
         coordinator = _find_profile(hass, person_id)
-        result = coordinator.data.get(person_id)
-        plan = result.plan if result is not None else None
-        if plan is None or plan.plan_id != plan_id:
+        plan = _plan_by_id(coordinator.data.get(person_id), plan_id)
+        if plan is None:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_plan",
@@ -299,7 +332,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         # configured timezone, so the mission id matches the coordinator's
         # (spec §14: local tz, not the server/UTC date).
         today = local_date_of(dt_util.utcnow())
-        mission_id = make_mission_id(person_id, today)
+        mission_id = make_mission_id(person_id, today, call.data[ATTR_SLOT])
         store = coordinator._store
         state = store.get_mission(mission_id)
         if state is None:

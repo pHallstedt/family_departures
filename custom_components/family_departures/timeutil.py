@@ -46,5 +46,11 @@ def combine_local(d: date, t: time) -> datetime:
 
 
 def make_mission_id(person_id: str, d: date, slot: str = "morning") -> str:
-    """Build a stable mission key ``person_id:YYYY-MM-DD:slot`` (spec §8)."""
+    """Build a stable mission key ``person_id:YYYY-MM-DD:slot`` (spec §8).
+
+    ``slot`` is ``morning`` for the main mission or ``x-<link_id>-<key>`` for an
+    extra-link event (plan §4.4); it must not contain ``:`` or ``|`` so the
+    ``split(":")`` and ``split("|")`` parsers in the store and dispatcher keep
+    working (:meth:`CalendarLink.slot_for` guarantees that).
+    """
     return f"{person_id}:{d.isoformat()}:{slot}"

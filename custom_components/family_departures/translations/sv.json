@@ -23,6 +23,8 @@
           "add_profile": "Lägg till profil",
           "edit_profile": "Ändra profil",
           "remove_profile": "Ta bort profil",
+          "locations": "Platser",
+          "calendars": "Kalendrar",
           "settings": "Notisinställningar"
         }
       },
@@ -33,6 +35,74 @@
           "dry_run": "Torrkörning (logga endast, anropa inte script)",
           "test_recipient_script": "Testmottagarens script"
         }
+      },
+      "locations": {
+        "title": "Platser",
+        "menu_options": {
+          "location_add": "Lägg till plats",
+          "location_edit": "Ändra plats",
+          "location_remove": "Ta bort plats"
+        }
+      },
+      "location_edit": {
+        "title": "Välj plats",
+        "data": {
+          "location_id": "Plats"
+        }
+      },
+      "location_form": {
+        "title": "Plats",
+        "description": "Ett namngivet ställe som profiler och kalenderlänkar kan gå till.",
+        "data": {
+          "name": "Namn",
+          "location": "Position",
+          "aliases": "Alias (kommaseparerat)",
+          "static_minutes": "Statisk restid (valfritt)"
+        },
+        "data_description": {
+          "aliases": "Andra namn en händelse kan använda, till exempel i en 'plats:'-tagg eller kalenderns LOCATION."
+        }
+      },
+      "location_remove": {
+        "title": "Ta bort plats",
+        "data": {
+          "location_id": "Plats"
+        }
+      },
+      "calendars": {
+        "title": "Kalendrar",
+        "menu_options": {
+          "calendar_add": "Lägg till kalender",
+          "calendar_edit": "Ändra kalender",
+          "calendar_remove": "Ta bort kalender"
+        }
+      },
+      "calendar_edit": {
+        "title": "Välj kalender",
+        "data": {
+          "calendar_id": "Kalender"
+        }
+      },
+      "calendar_form": {
+        "title": "Kalender",
+        "description": "ICS-länken innehåller en personlig token och lagras säkert. Lämna tom för att behålla sparad länk. Personer som väljs nedan får kalendern som extra länk.",
+        "data": {
+          "name": "Namn",
+          "source_type": "Källtyp",
+          "ics_url": "ICS-länk",
+          "calendar_entity_id": "Kalenderentitet",
+          "persons": "Länkade personer"
+        }
+      },
+      "calendar_remove": {
+        "title": "Ta bort kalender",
+        "data": {
+          "calendar_id": "Kalender"
+        }
+      },
+      "calendar_remove_confirm": {
+        "title": "Ta bort kalender",
+        "description": "Kalendern tas bort från alla profiler som använder den och dess sparade länk raderas. Detta kan inte ångras."
       },
       "edit_profile": {
         "title": "Välj profil",
@@ -48,30 +118,61 @@
       },
       "remove_confirm": {
         "title": "Ta bort profil",
-        "description": "Att ta bort profilen raderar dess inställningar, den sparade schemalänken och alla dess entiteter. Detta kan inte ångras."
-      },
-      "profile_source": {
-        "title": "Schemakälla",
-        "description": "ICS-länken innehåller en personlig token och lagras säkert. Lämna tom för att behålla sparad länk.",
+        "description": "Att ta bort profilen raderar dess inställningar och alla dess entiteter, och andra profiler slutar kopiera notiser till den. Bara den här profilen använde: {unused}. Kryssa i rutan för att ta bort de kalendrarna (med sparade länkar) och platserna också. Detta kan inte ångras.",
         "data": {
-          "name": "Visningsnamn",
-          "source_type": "Källtyp",
-          "ics_url": "ICS-länk",
-          "calendar_entity_id": "Kalenderentitet",
-          "exclude_patterns": "Exkludera mönster (kommaseparerat)",
-          "include_patterns": "Inkludera mönster (kommaseparerat)"
+          "remove_unused": "Ta bort kalendrar och platser som bara den här profilen använde"
+        }
+      },
+      "profile_person": {
+        "title": "Person",
+        "description": "Home Assistant-personen profilen tillhör. Den används för att matcha namn i delade kalendrar.",
+        "data": {
+          "person_entity_id": "Person",
+          "name": "Visningsnamn (tomt: personens namn)",
+          "is_adult": "Vuxen (sätter standardmarginal för ankomst till 0)"
         }
       },
       "profile_destination": {
         "title": "Destination och färdsätt",
-        "description": "Kollektivtrafikmarginaler visas även när standardfärdsättet är bil.",
+        "description": "Välj en sparad plats, eller skriv ett namn och välj en position för att skapa en ny. Kollektivtrafikmarginaler visas även när standardfärdsättet är bil.",
         "data": {
-          "destination_location": "Destination",
+          "default_location": "Standardplats",
+          "new_location_name": "Namn på ny plats",
+          "destination_location": "Position för den nya platsen",
           "default_mode": "Standardfärdsätt",
           "static_minutes": "Statisk restid (cykel/gång, dörr till dörr)",
           "static_label": "Etikett för statiskt färdsätt",
           "weather_adjust": "Lägg väderpåslag på den statiska tiden",
           "car_fallback_minutes": "Reservtid för bil (min)"
+        }
+      },
+      "profile_calendars": {
+        "title": "Kalendrar",
+        "description": "Länka kalendrarna profilen följer och välj huvudkalendern (skolan: dagens första händelse styr avgången). Varje annan länkad kalender blir en aktivitetskalender: varje händelse är en egen resa. Noll kalendrar går bra för en profil som bara får kopior. En ny kalender kan skapas nedan.",
+        "data": {
+          "calendars": "Länkade kalendrar",
+          "main_calendar": "Huvudkalender",
+          "new_calendar_name": "Namn på ny kalender",
+          "new_calendar_source_type": "Källtyp för ny kalender",
+          "new_calendar_ics_url": "ICS-länk för ny kalender",
+          "new_calendar_entity_id": "Kalenderentitet för ny kalender"
+        }
+      },
+      "profile_link": {
+        "title": "Kalenderlänk",
+        "description": "Inställningar för länken till {calendar} ({role}). Regler kopplar en rubrik till plats eller färdsätt, en per rad: IDRO => Sporthallen, eller Simning => Badhuset, kollektivt.",
+        "data": {
+          "label": "Etikett",
+          "include_patterns": "Inkludera mönster (kommaseparerat)",
+          "exclude_patterns": "Exkludera mönster (kommaseparerat)",
+          "attendee_mode": "Vilka händelser som gäller personen",
+          "location": "Standardplats för länken",
+          "mode": "Standardfärdsätt för länken",
+          "static_minutes": "Statisk restid för länken",
+          "arrival_margin": "Ankomstmarginal för länken (min)",
+          "rules": "Regler (text => plats, färdsätt)",
+          "match_event_location": "Matcha händelsens LOCATION mot platsalias",
+          "show_summary": "Visa händelsens rubrik i notiser"
         }
       },
       "profile_margins": {
@@ -96,14 +197,17 @@
       },
       "profile_notifications": {
         "title": "Notiser och kanaler",
-        "description": "Kanalscript är valfria så att profiler utan telefon ändå kan konfigureras.",
+        "description": "Kanalscript är valfria så att profiler utan telefon ändå kan konfigureras. Kopior skickar den här personens notistext till valda profilers telefoner. Kopior skickas bara medan profilens egna notiser är aktiverade, även om den inte har några script.",
         "data": {
           "quiet_start": "Tyst tid börjar",
           "quiet_end": "Tyst tid slutar",
           "notifications_enabled": "Notiser aktiverade",
           "evening_notice_enabled": "Kvällssammanfattning aktiverad",
           "change_threshold_minutes": "Ändringströskel (min)",
-          "person_entity_id": "Personentitet (närvaro)",
+          "copy_to": "Skicka kopior till",
+          "copy_kinds": "Notistyper att kopiera",
+          "lunch_calendar_entity_id": "Lunchkalender (entitet)",
+          "lunch_in_digest": "Ta med lunch i kvällssammanfattningen",
           "script_push": "Push-script",
           "script_tts": "TTS-script",
           "script_family_chat": "Familjechatt-script"
@@ -118,10 +222,19 @@
       "ics_required": "En ICS-länk krävs för denna källtyp.",
       "calendar_required": "En kalenderentitet krävs för denna källtyp.",
       "cannot_connect": "ICS-länken kunde inte hämtas.",
-      "invalid_calendar": "Svaret var inte en giltig kalender."
+      "invalid_calendar": "Svaret var inte en giltig kalender.",
+      "location_in_use": "Platsen används av en profil eller en kalenderlänk.",
+      "location_required": "Välj en sparad plats eller namnge en ny.",
+      "person_in_use": "Personen tillhör redan en annan profil.",
+      "name_required": "Ange ett visningsnamn.",
+      "rules_invalid": "Varje regel ska vara 'text => plats eller färdsätt' med en känd plats eller ett känt färdsätt.",
+      "duplicate_link": "Kalendern är redan länkad till profilen.",
+      "main_not_linked": "Huvudkalendern måste vara en av de länkade kalendrarna."
     },
     "abort": {
-      "no_profiles": "Inga profiler konfigurerade ännu."
+      "no_profiles": "Inga profiler konfigurerade ännu.",
+      "no_locations": "Inga platser konfigurerade ännu.",
+      "no_calendars": "Inga kalendrar konfigurerade ännu."
     },
     "selector": {
       "source_type": {
@@ -135,6 +248,34 @@
           "public_transport": "Kollektivtrafik",
           "car": "Bil",
           "static": "Cykel/gång (statisk tid)"
+        }
+      },
+      "mode_or_default": {
+        "options": {
+          "profile-default": "Profilens standard",
+          "public_transport": "Kollektivtrafik",
+          "car": "Bil",
+          "static": "Cykel/gång (statisk tid)"
+        }
+      },
+      "attendee_mode": {
+        "options": {
+          "all": "Alla händelser",
+          "tagged": "Bara händelser som nämner personen",
+          "tagged_or_untagged": "Otaggade händelser och de som nämner personen"
+        }
+      },
+      "copy_kind": {
+        "options": {
+          "evening": "Kvällssammanfattning",
+          "packing": "Packpåminnelse",
+          "morning": "Morgonnotis",
+          "reminder": "Påminnelse",
+          "leave_now": "Dags att gå",
+          "change": "Ändring",
+          "critical": "Kritisk ändring",
+          "cleanup": "Rensning",
+          "removed": "Händelse borttagen"
         }
       }
     }
@@ -210,7 +351,8 @@
       "name": "Hämta alternativ",
       "description": "Returnera nåbara resor för aktuell plan.",
       "fields": {
-        "person_id": { "name": "Person", "description": "Profil-id." }
+        "person_id": { "name": "Person", "description": "Profil-id." },
+        "plan_id": { "name": "Plan id", "description": "Valfritt plan-id för ett av dagens uppdrag; standard är det aktiva uppdraget." }
       }
     },
     "select_journey": {
@@ -232,7 +374,8 @@
       "name": "Återöppna idag",
       "description": "Återöppna dagens uppdrag efter att det stängts av en avresa.",
       "fields": {
-        "person_id": { "name": "Person", "description": "Profil-id." }
+        "person_id": { "name": "Person", "description": "Profil-id." },
+        "slot": { "name": "Slot", "description": "Uppdragets slot att återöppna; standard är morning (huvuduppdraget)." }
       }
     }
   },
@@ -271,7 +414,10 @@
       "route_summary": { "name": "Resväg" },
       "packing_list": { "name": "Packlista" },
       "packing_list_tomorrow": { "name": "Packlista imorgon" },
-      "default_transport": { "name": "Standardfärdsätt" }
+      "default_transport": { "name": "Standardfärdsätt" },
+      "missions_today": { "name": "Uppdrag idag" },
+      "missions_tomorrow": { "name": "Uppdrag imorgon" },
+      "lunch_tomorrow": { "name": "Lunch imorgon" }
     },
     "binary_sensor": {
       "departure_disruption": { "name": "Resestörning" },
@@ -308,16 +454,20 @@
   },
   "issues": {
     "invalid_source": {
-      "title": "Schemakällan för {profile} kan inte användas",
-      "description": "Schemakällan för {profile} kunde inte sättas upp ({reason}). Öppna integrationens inställningar och ange ett giltigt ICS-flöde eller en kalenderentitet för profilen."
+      "title": "Kalendern {calendar} kan inte användas",
+      "description": "Kalendern {calendar} ({linked_profiles} länkade profiler) kunde inte sättas upp ({reason}). Öppna integrationens inställningar och ange ett giltigt ICS-flöde eller en kalenderentitet för kalendern."
     },
     "missing_destination": {
       "title": "Destination saknas för {profile}",
       "description": "{profile} saknar destinationskoordinater, så ingen restid kan beräknas. Öppna integrationens inställningar och ange destinationens plats för profilen."
     },
     "repeated_fetch_failure": {
-      "title": "Schemakällan för {profile} misslyckas upprepade gånger",
-      "description": "Schemat för {profile} kunde inte hämtas {failures} gånger i rad (senaste fel: {error_code}). Kontrollera att flödet går att nå; det senast cachade schemat används tills det fungerar igen."
+      "title": "Kalendern {calendar} misslyckas upprepade gånger",
+      "description": "Kalendern {calendar} ({linked_profiles} länkade profiler) kunde inte hämtas {failures} gånger i rad (senaste fel: {error_code}). Kontrollera att flödet går att nå; det senast cachade schemat används tills det fungerar igen."
+    },
+    "profile_without_person": {
+      "title": "Profilen {profile} saknar länkad person",
+      "description": "{profile} är inte länkad till en Home Assistant-personentitet och kan därför inte matchas mot deltagartaggar i delade kalendrar. Öppna integrationens inställningar och länka en person till profilen."
     }
   }
 }

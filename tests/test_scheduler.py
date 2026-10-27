@@ -20,20 +20,26 @@ Covered behaviour (T17 acceptance, spec §11.3):
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
-from custom_components.family_departures.coordinator import ProfileResult
+from custom_components.family_departures.coordinator import (
+    MissionResult,
+    ProfileResult,
+)
 from custom_components.family_departures.models import (
     ArrivalRequirement,
+    CalendarLink,
     DeparturePlan,
+    LunchMenu,
     MissionState,
     NotificationIntent,
+    NotifiedRecord,
     ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
-    SourceFilter,
 )
 from custom_components.family_departures.notification_policy import (
     KIND_CHANGE,
@@ -47,6 +53,7 @@ from custom_components.family_departures.schedule import select_requirement
 from custom_components.family_departures.scheduler import (
     CATCH_UP_LEAVE_NOW_WINDOW,
     NotificationScheduler,
+    _digest_time,
     _trigger_times,
 )
 from custom_components.family_departures.store import FamilyDeparturesStore
@@ -91,12 +98,7 @@ def _profile(
     return ProfileConfig(
         id=profile_id,
         name=profile_id.title(),
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(exclude_patterns=(), include_patterns=()),
-        destination_id=f"{profile_id}_destination",
-        dest_lat=59.4,
-        dest_lon=18.1,
+        default_location_id=f"{profile_id}_destination",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,
@@ -111,6 +113,13 @@ def _profile(
         quiet_start=_t.fromisoformat(quiet_start),
         quiet_end=_t.fromisoformat(quiet_end),
         scripts={"push": "script.push_kid_a"},
+        calendar_links=(
+            CalendarLink(
+                link_id="main",
+                calendar_id=f"{profile_id}_calendar",
+                role="main",
+            ),
+        ),
         evening_notice_enabled=True,
     )
 
@@ -176,7 +185,7 @@ def _profile_result(profile: ProfileConfig, plan: DeparturePlan) -> ProfileResul
                 summary="Lektion MA",
                 start=plan.requirement.event_start,
                 end=plan.requirement.event_start + timedelta(minutes=50),
-                source_id=profile.destination_id,
+                source_id=profile.calendar_links[0].calendar_id,
             ),
         ),
         fetched_at=dt_util.utcnow(),
@@ -213,6 +222,9 @@ class FakeCoordinator:
 
         return _remove
 
+    def attendee_aliases(self, profile: ProfileConfig) -> frozenset[str]:
+        return frozenset()
+
     def set_results(self, results: dict[str, ProfileResult]) -> None:
         self.data = results
         for listener in list(self._listeners):
@@ -232,6 +244,9 @@ class RecordingDispatch:
     def kinds(self) -> list[str]:
         return [intent.kind for batch in self.batches for intent in batch]
 
+    def intents(self, kind: str) -> list[NotificationIntent]:
+        return [i for batch in self.batches for i in batch if i.kind == kind]
+
 
 @pytest.fixture
 async def store(hass: HomeAssistant) -> FamilyDeparturesStore:
@@ -246,20 +261,24 @@ async def store(hass: HomeAssistant) -> FamilyDeparturesStore:
 
 
 def test_trigger_times_cover_the_mission_lifecycle() -> None:
-    """A plan yields evening, −60, −10, leave-now and timeout wake-ups (§11.1)."""
+    """A plan yields −60, −10, leave-now and timeout wake-ups (§11.1).
+
+    The 20:00 day-before wake-up belongs to the digest, not to the mission.
+    """
     plan = _plan()
     times = _trigger_times(plan)
 
     evening = datetime(2026, 10, 19, 20, 0, tzinfo=TZ).astimezone(UTC)
-    assert evening in times
+    assert evening not in times
+    assert _digest_time(TODAY) == evening
     assert REC_LOCAL - timedelta(minutes=60) in times
     assert REC_LOCAL - timedelta(minutes=10) in times
     assert REC_LOCAL in times
     assert EVENT_LOCAL + timedelta(minutes=60) in times
 
 
-def test_trigger_times_without_departure_still_arm_evening_and_timeout() -> None:
-    """A plan with no recommended leave still gets evening + timeout (§10)."""
+def test_trigger_times_without_departure_still_arm_the_timeout() -> None:
+    """A plan with no recommended leave still gets its timeout wake-up (§10)."""
     plan = _plan(recommended=None, status="needs_configuration")
     times = _trigger_times(plan)
 
@@ -655,3 +674,375 @@ async def test_notifications_disabled_profile_sends_nothing(
     assert dispatch.batches == []
 
     await scheduler.async_shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Multiple missions per profile (plan item 6)
+# ---------------------------------------------------------------------------
+
+EXTRA_START = combine_local(TODAY, datetime.min.time().replace(hour=17, minute=30))
+EXTRA_REC = combine_local(TODAY, datetime.min.time().replace(hour=17, minute=0))
+
+
+def _club_profile() -> ProfileConfig:
+    base = _profile()
+    return replace(
+        base,
+        calendar_links=(
+            *base.calendar_links,
+            CalendarLink(link_id="club", calendar_id="club_calendar", role="extra"),
+        ),
+    )
+
+
+def _extra_plan(recommended: datetime = EXTRA_REC) -> DeparturePlan:
+    mission_id = make_mission_id("kid_a", TODAY, "x-club-k1")
+    req = ArrivalRequirement(
+        mission_id=mission_id,
+        person_id="kid_a",
+        local_date=TODAY,
+        event_id="f1",
+        event_start=EXTRA_START,
+        arrival_deadline=EXTRA_START - timedelta(minutes=5),
+        destination_id="pitch",
+        source="ics",
+        slot="x-club-k1",
+        link_id="club",
+        label="Fotboll",
+        destination_name="Planen",
+    )
+    return replace(
+        _plan(),
+        mission_id=mission_id,
+        plan_id=f"{mission_id}:1",
+        requirement=req,
+        recommended_leave=recommended,
+        latest_leave=recommended,
+    )
+
+
+def _multi_result(
+    profile: ProfileConfig,
+    *plans: DeparturePlan,
+    failed: tuple[str, ...] = (),
+) -> ProfileResult:
+    base = _profile_result(profile, plans[0])
+    return replace(
+        base,
+        missions=tuple(
+            MissionResult(link_id=p.requirement.link_id or "main", plan=p)
+            for p in plans
+        ),
+        failed_extra_links=failed,
+    )
+
+
+async def test_every_mission_gets_its_own_notices_and_tag(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    profile = _club_profile()
+    main, extra = _plan(), _extra_plan()
+    store.set_mission(_mission(main))
+    store.set_mission(_mission(extra))
+    coord = FakeCoordinator({"kid_a": _multi_result(profile, main, extra)})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+
+    with freeze_time(REC_LOCAL - timedelta(hours=3)):
+        await scheduler.async_start()
+    for at in (REC_LOCAL, EXTRA_REC):
+        with freeze_time(at):
+            async_fire_time_changed(hass, at)
+            await hass.async_block_till_done()
+
+    leave_now = [
+        i for batch in dispatch.batches for i in batch if i.kind == KIND_LEAVE_NOW
+    ]
+    assert sorted(i.mission_id for i in leave_now) == sorted(
+        [main.mission_id, extra.mission_id]
+    )
+    assert len({i.tag for i in leave_now}) == 2
+    extra_intent = next(i for i in leave_now if i.mission_id == extra.mission_id)
+    assert extra_intent.slot == "x-club-k1"
+    assert extra_intent.title == "Kid_A – Fotboll 17:30"
+    assert dispatch.kinds.count(KIND_LEAVE_NOW) == 2
+
+    await scheduler.async_shutdown()
+
+
+async def _vanished_extra(
+    hass: HomeAssistant,
+    store: FamilyDeparturesStore,
+    *,
+    failed: tuple[str, ...] = (),
+    notified: tuple[str, ...] = (KIND_MORNING,),
+) -> tuple[RecordingDispatch, FakeCoordinator, NotificationScheduler]:
+    profile = _club_profile()
+    main, extra = _plan(), _extra_plan()
+    store.set_mission(_mission(main))
+    state = _mission(extra)
+    store.set_mission(
+        replace(
+            state,
+            notified={
+                kind: NotifiedRecord(
+                    kind=kind, sent_at=EXTRA_REC, leave_time=EXTRA_REC, revision=1
+                )
+                for kind in notified
+            },
+        )
+    )
+    store.set_plan(extra)
+    coord = FakeCoordinator({"kid_a": _multi_result(profile, main, extra)})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+    # Early enough that catch-up has sent no leave notice of its own yet.
+    with freeze_time(EXTRA_REC - timedelta(hours=3)):
+        await scheduler.async_start()
+        coord.set_results({"kid_a": _multi_result(profile, main, failed=failed)})
+        await hass.async_block_till_done()
+    return dispatch, coord, scheduler
+
+
+async def test_removed_extra_event_sends_removed_and_cleanup_once(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    dispatch, coord, scheduler = await _vanished_extra(hass, store)
+
+    assert dispatch.kinds.count("removed") == 1
+    assert dispatch.kinds.count("cleanup") == 1
+    removed = next(i for b in dispatch.batches for i in b if i.kind == "removed")
+    assert removed.message == "Fotboll 17:30 är borttagen ur kalendern."
+
+    with freeze_time(EXTRA_REC - timedelta(minutes=20)):
+        coord.set_results(coord.data)
+        await hass.async_block_till_done()
+    assert dispatch.kinds.count("removed") == 1
+    await scheduler.async_shutdown()
+
+
+async def test_removed_extra_event_is_silent_without_a_prior_leave_notice(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    dispatch, _coord, scheduler = await _vanished_extra(hass, store, notified=())
+    assert "removed" not in dispatch.kinds
+    await scheduler.async_shutdown()
+
+
+async def test_extra_link_fetch_failure_is_not_a_removal(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    dispatch, _coord, scheduler = await _vanished_extra(hass, store, failed=("club",))
+    assert "removed" not in dispatch.kinds
+    await scheduler.async_shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Day-before digest (plan item 7)
+# ---------------------------------------------------------------------------
+
+DIGEST_ID = make_mission_id("kid_a", TODAY, "day")
+EVENING_BEFORE = combine_local(
+    TODAY - timedelta(days=1), datetime.min.time().replace(hour=20)
+)
+
+
+def _digest_state() -> MissionState:
+    return MissionState(
+        mission_id=DIGEST_ID,
+        status="scheduled",
+        departed_at=None,
+        reopened=False,
+        notified={},
+        first_published_leave=None,
+        action_nonce="digest-nonce",
+    )
+
+
+def _tomorrow_result(profile: ProfileConfig, *plans: DeparturePlan) -> ProfileResult:
+    base = _profile_result(profile, plans[0]) if plans else None
+    assert base is not None
+    day_before = TODAY - timedelta(days=1)
+    return replace(
+        base,
+        plan=None,
+        local_date=day_before,
+        tomorrow_plan=plans[0],
+        tomorrow_missions=tuple(
+            MissionResult(link_id=p.requirement.link_id or "main", plan=p)
+            for p in plans
+        ),
+        tomorrow_schedule=base.schedule,
+        tomorrow_packing=base.packing,
+    )
+
+
+async def _digest_scheduler(
+    hass: HomeAssistant,
+    store: FamilyDeparturesStore,
+    profile: ProfileConfig,
+    *plans: DeparturePlan,
+    lunch: LunchMenu | None = None,
+) -> tuple[RecordingDispatch, NotificationScheduler]:
+    for plan in plans:
+        store.set_mission(_mission(plan))
+    store.set_mission(_digest_state())
+    result = replace(_tomorrow_result(profile, *plans), lunch_tomorrow=lunch)
+    coord = FakeCoordinator({"kid_a": result})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+    with freeze_time(EVENING_BEFORE - timedelta(hours=2)):
+        await scheduler.async_start()
+    assert dispatch.batches == []
+    return dispatch, scheduler
+
+
+async def test_digest_fires_once_at_twenty_and_is_ledgered(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    main, extra = _plan(), _extra_plan()
+    dispatch, scheduler = await _digest_scheduler(
+        hass, store, _club_profile(), main, extra
+    )
+
+    for at in (EVENING_BEFORE, EVENING_BEFORE + timedelta(minutes=1)):
+        with freeze_time(at):
+            async_fire_time_changed(hass, at)
+            await hass.async_block_till_done()
+
+    [digest] = dispatch.intents("evening")
+    assert digest.mission_id == DIGEST_ID
+    assert digest.message.splitlines() == [
+        "08:20 Skola – gå 07:30",
+        "17:30 Fotboll → Planen – gå 17:00",
+    ]
+    ledger = store.get_mission(DIGEST_ID)
+    assert ledger is not None and "evening" in ledger.notified
+    # Each mission it told about notes the leave time the person was given.
+    for plan in (main, extra):
+        mission = store.get_mission(plan.mission_id)
+        assert mission is not None
+        assert mission.notified["evening"].leave_time == plan.recommended_leave
+    # Tomorrow's missions send nothing else tonight.
+    assert dispatch.kinds == ["evening"]
+
+    await scheduler.async_shutdown()
+
+
+async def test_digest_carries_the_lunch_menu_from_the_coordinator_result(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    lunch = LunchMenu(
+        local_date=TODAY,
+        status="ok",
+        dishes=("Pasta", "Sallad"),
+        fetched_at=EVENING_BEFORE,
+    )
+    dispatch, scheduler = await _digest_scheduler(
+        hass, store, _club_profile(), _plan(), lunch=lunch
+    )
+
+    with freeze_time(EVENING_BEFORE):
+        async_fire_time_changed(hass, EVENING_BEFORE)
+        await hass.async_block_till_done()
+
+    [digest] = dispatch.intents("evening")
+    assert digest.message.splitlines()[-1] == "Lunch imorgon: Pasta, Sallad"
+    assert digest.lunch_menu == "Lunch imorgon: Pasta, Sallad"
+
+    await scheduler.async_shutdown()
+
+
+async def test_digest_is_not_resent_when_legacy_morning_ledger_has_evening(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    main = _plan()
+    legacy = replace(
+        _mission(main),
+        notified={
+            "evening": NotifiedRecord(
+                kind="evening",
+                sent_at=EVENING_BEFORE - timedelta(minutes=5),
+                leave_time=main.recommended_leave,
+                revision=1,
+            )
+        },
+    )
+    store.set_mission(legacy)
+    store.set_mission(_digest_state())
+    coord = FakeCoordinator({"kid_a": _tomorrow_result(_profile(), main)})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+    with freeze_time(EVENING_BEFORE - timedelta(hours=2)):
+        await scheduler.async_start()
+    with freeze_time(EVENING_BEFORE):
+        async_fire_time_changed(hass, EVENING_BEFORE)
+        await hass.async_block_till_done()
+
+    assert dispatch.batches == []
+    await scheduler.async_shutdown()
+
+
+async def test_digest_is_held_inside_quiet_hours(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    from datetime import time as _t
+
+    profile = replace(_profile(), quiet_start=_t(19, 0), quiet_end=_t(6, 0))
+    dispatch, scheduler = await _digest_scheduler(hass, store, profile, _plan())
+
+    with freeze_time(EVENING_BEFORE):
+        async_fire_time_changed(hass, EVENING_BEFORE)
+        await hass.async_block_till_done()
+
+    assert dispatch.batches == []
+    await scheduler.async_shutdown()
+
+
+async def test_no_digest_when_tomorrow_has_no_mission(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    profile, plan = _profile(), _plan()
+    store.set_mission(_digest_state())
+    result = replace(
+        _tomorrow_result(profile, plan), tomorrow_plan=None, tomorrow_missions=()
+    )
+    coord = FakeCoordinator({"kid_a": result})
+    dispatch = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, dispatch)
+    with freeze_time(EVENING_BEFORE - timedelta(hours=2)):
+        await scheduler.async_start()
+    with freeze_time(EVENING_BEFORE):
+        async_fire_time_changed(hass, EVENING_BEFORE)
+        await hass.async_block_till_done()
+
+    assert dispatch.batches == []
+    assert not scheduler._timers
+    await scheduler.async_shutdown()
+
+
+async def test_restart_after_twenty_catches_up_the_digest_exactly_once(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    profile, main = _profile(), _plan()
+    store.set_mission(_mission(main))
+    store.set_mission(_digest_state())
+    coord = FakeCoordinator({"kid_a": _tomorrow_result(profile, main)})
+    late = EVENING_BEFORE + timedelta(minutes=30)
+
+    first = RecordingDispatch()
+    scheduler = NotificationScheduler(hass, coord, store, first)
+    with freeze_time(late):
+        await scheduler.async_start()
+    assert first.kinds == ["evening"]
+    await scheduler.async_shutdown()
+
+    # A restart on the same store: the ledger keeps the digest from resending.
+    second = RecordingDispatch()
+    restarted = NotificationScheduler(hass, coord, store, second)
+    with freeze_time(late + timedelta(minutes=5)):
+        await restarted.async_start()
+        async_fire_time_changed(hass, late + timedelta(minutes=6))
+        await hass.async_block_till_done()
+    assert second.batches == []
+    await restarted.async_shutdown()

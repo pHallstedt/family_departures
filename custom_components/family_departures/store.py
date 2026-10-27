@@ -44,6 +44,7 @@ from .models import (
     ArrivalRequirement,
     DayOverride,
     DeparturePlan,
+    EventTags,
     MarginBreakdown,
     MissionState,
     NotifiedRecord,
@@ -55,7 +56,7 @@ from .timeutil import local_date_of
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION: Final = 1
-STORAGE_MINOR_VERSION: Final = 1
+STORAGE_MINOR_VERSION: Final = 2
 # Keep finished missions, overrides and acknowledgements for one week (spec §15).
 RETENTION_DAYS: Final = 7
 # Debounce window for state writes (spec §11.3: no write per minute per profile).
@@ -202,6 +203,24 @@ def _mission_from_json(data: Mapping[str, Any]) -> MissionState:
     )
 
 
+def _tags_to_json(tags: EventTags) -> dict[str, Any]:
+    return {
+        "location": tags.location,
+        "transport": tags.transport,
+        "attendees": list(tags.attendees),
+    }
+
+
+def _tags_from_json(data: Any) -> EventTags:
+    if not isinstance(data, Mapping):
+        return EventTags()
+    return EventTags(
+        location=data.get("location"),
+        transport=data.get("transport"),
+        attendees=tuple(str(a) for a in data.get("attendees", ()) or ()),
+    )
+
+
 def _event_to_json(event: ScheduleEvent) -> dict[str, Any]:
     return {
         "uid": event.uid,
@@ -209,6 +228,9 @@ def _event_to_json(event: ScheduleEvent) -> dict[str, Any]:
         "start": _dt_to_json(event.start),
         "end": _dt_to_json(event.end),
         "source_id": event.source_id,
+        "location": event.location,
+        "tags": _tags_to_json(event.tags),
+        "occurrence_key": event.occurrence_key,
     }
 
 
@@ -223,6 +245,9 @@ def _event_from_json(data: Mapping[str, Any]) -> ScheduleEvent:
         start=start,
         end=end,
         source_id=str(data["source_id"]),
+        location=data.get("location"),
+        tags=_tags_from_json(data.get("tags")),
+        occurrence_key=data.get("occurrence_key"),
     )
 
 
@@ -267,6 +292,12 @@ def _requirement_to_json(req: ArrivalRequirement) -> dict[str, Any]:
         "arrival_deadline": _dt_to_json(req.arrival_deadline),
         "destination_id": req.destination_id,
         "source": req.source,
+        "slot": req.slot,
+        "link_id": req.link_id,
+        "mode": req.mode,
+        "label": req.label,
+        "destination_name": req.destination_name,
+        "warnings": list(req.warnings),
     }
 
 
@@ -285,6 +316,12 @@ def _requirement_from_json(data: Mapping[str, Any]) -> ArrivalRequirement:
         arrival_deadline=arrival_deadline,
         destination_id=str(data["destination_id"]),
         source=str(data["source"]),
+        slot=str(data.get("slot", "morning")),
+        link_id=data.get("link_id"),
+        mode=data.get("mode"),
+        label=data.get("label"),
+        destination_name=data.get("destination_name"),
+        warnings=tuple(str(w) for w in data.get("warnings", ()) or ()),
     )
 
 
@@ -625,13 +662,26 @@ class _MigratingStore(Store[dict[str, Any]]):
     ) -> dict[str, Any]:
         """Migrate stored data to the current schema.
 
-        Version 1 is the first released schema, so there is nothing to migrate
-        yet. The hook exists so a future bump has a home; unknown future
-        versions fall through to the current layout unchanged.
+        Minor version 2 re-keys the schedule cache from the per-profile
+        ``destination_id`` to the per-calendar ``calendar_id`` (plan §2.3). The
+        old cache cannot be re-keyed reliably, so it is simply dropped: it is a
+        refetchable two-day cache and the next round repopulates it under the
+        new key. Missions (incl. the notification ledger), plans, overrides and
+        packing acknowledgements are kept untouched, so the main mission
+        ``person:date:morning`` keeps its ledger and no evening/morning notice
+        is resent after the upgrade.
         """
         if old_major_version > STORAGE_VERSION:
             # Downgrade: keep what we can; the loader drops unknown records.
             return old_data
+        if (
+            old_major_version == STORAGE_VERSION
+            and old_minor_version < 2
+            and isinstance(old_data, Mapping)
+        ):
+            migrated = dict(old_data)
+            migrated.pop("schedules", None)
+            return migrated
         return old_data
 
 

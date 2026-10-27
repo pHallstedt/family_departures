@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -31,6 +31,7 @@ import aiohttp
 from ical.calendar_stream import IcsCalendarStream
 from ical.exceptions import CalendarError
 
+from ..event_tags import parse_event_tags
 from ..models import ScheduleEvent, ScheduleResult, SourceFilter
 from ..timeutil import TZ, local_day_bounds
 
@@ -135,18 +136,61 @@ def parse_ics(
             continue
         start = _to_utc(item_start, fallback_tz)
         end = _to_utc(item_end, fallback_tz)
+        uid = item.uid or ""
+        # Raw DESCRIPTION is parsed for known override tags only and never kept
+        # (plan §5.3, §10). LOCATION is kept raw (capped by ScheduleEvent) and
+        # used for the opt-in alias match; it is never geocoded or fetched.
+        tags = parse_event_tags(summary, item.description)
         events.append(
             ScheduleEvent(
-                uid=item.uid or "",
+                uid=uid,
                 summary=summary,
                 start=start,
                 end=end,
                 source_id=source_id,
+                location=item.location,
+                tags=tags,
+                occurrence_key=_occurrence_key(uid, summary, item.recurrence_id),
             )
         )
 
     events.sort(key=lambda e: e.start)
-    return tuple(events)
+    return _suffix_repeated_keys(events)
+
+
+def _suffix_repeated_keys(events: list[ScheduleEvent]) -> tuple[ScheduleEvent, ...]:
+    """Give the nth event sharing a key (in start order) a ``-n`` suffix.
+
+    Without a ``recurrence_id`` the key does not include the start time, so two
+    occurrences of one UID on the same day would collide; the suffix keeps them
+    apart while a moved single event still keeps its key.
+    """
+    seen: dict[str, int] = {}
+    keyed: list[ScheduleEvent] = []
+    for event in events:
+        key = event.occurrence_key or ""
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] > 1:
+            event = replace(event, occurrence_key=f"{key}-{seen[key]}")
+        keyed.append(event)
+    return tuple(keyed)
+
+
+def _occurrence_key(uid: str, summary: str, recurrence_id: object) -> str:
+    """Stable per-occurrence key for an ICS event (plan §4.4, U8).
+
+    ``sha1(uid + "|" + recurrence_id)`` truncated to 10 hex characters. ICS
+    UIDs are stable across time edits, so a **moved** event keeps its key and
+    therefore its mission (the change alert fires instead of a fresh notice).
+    ``ical`` does not expose a ``recurrence_id`` for plain or expanded events,
+    so without one the key is the UID alone; repeated keys within a day get a
+    ``-n`` suffix (:func:`_suffix_repeated_keys`). A feed without UIDs falls
+    back to the summary.
+    """
+    base = uid or f"summary:{summary.casefold()}"
+    discriminator = str(recurrence_id) if recurrence_id else ""
+    digest = hashlib.sha1(f"{base}|{discriminator}".encode()).hexdigest()
+    return digest[:10]
 
 
 def disappeared_uids(

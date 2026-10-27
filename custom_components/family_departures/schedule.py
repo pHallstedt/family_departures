@@ -31,6 +31,7 @@ from datetime import date, datetime, timedelta
 
 from .models import (
     ArrivalRequirement,
+    CalendarLink,
     DayOverride,
     MissionState,
     ProfileConfig,
@@ -134,12 +135,19 @@ def select_requirement(
     previous_events: tuple[ScheduleEvent, ...] | None,
     state: MissionState | None,
     now: datetime,
+    link: CalendarLink | None = None,
 ) -> RequirementOutcome:
     """Select the arrival requirement (or day status) for ``profile`` on ``d``.
 
     See the module docstring for the ordering of rules. ``now`` is accepted for
     purity and future use; selection itself does not branch on the clock
     because the first start is chosen from the whole local day (§5.3).
+
+    ``link`` is the profile's ``main`` calendar link (plan §4.2). When given,
+    the requirement's ``link_id`` is the link's id and the arrival margin is
+    ``link.arrival_margin`` when set, else ``profile.margins.arrival``. When
+    omitted, the behaviour is identical to before: the link id falls back to
+    ``profile.main_link`` and the margin to ``profile.margins.arrival``.
     """
     locked = _is_locked(state)
 
@@ -175,7 +183,7 @@ def select_requirement(
         if result.stale:
             error_reasons.append(REASON_STALE_CACHE)
         cached_requirement = _build_requirement(
-            profile, d, result.events, override, locked
+            profile, d, result.events, override, locked, link
         )
         # Keep a usable requirement from stale cache (if any) while flagging the
         # error so quality/notifications can downgrade appropriately.
@@ -195,7 +203,7 @@ def select_requirement(
             reason_codes=(REASON_EMPTY_SCHEDULE,),
         )
 
-    requirement = _requirement_from_event(profile, d, event, override)
+    requirement = _requirement_from_event(profile, d, event, override, link)
     reasons: list[str] = [REASON_FIRST_EVENT]
     if override is not None and override.arrival_time is not None:
         reasons.append(REASON_ARRIVAL_OVERRIDE)
@@ -216,6 +224,7 @@ def _build_requirement(
     events: tuple[ScheduleEvent, ...],
     override: DayOverride | None,
     locked: bool,
+    link: CalendarLink | None = None,
 ) -> ArrivalRequirement | None:
     """Build a requirement from the first event, or ``None`` if there is none.
 
@@ -225,7 +234,7 @@ def _build_requirement(
     event, _moved = _select_event(events, None, locked=locked)
     if event is None:
         return None
-    return _requirement_from_event(profile, d, event, override)
+    return _requirement_from_event(profile, d, event, override, link)
 
 
 def _requirement_from_event(
@@ -233,6 +242,7 @@ def _requirement_from_event(
     d: date,
     event: ScheduleEvent,
     override: DayOverride | None,
+    link: CalendarLink | None = None,
 ) -> ArrivalRequirement:
     """Turn the chosen first event into an :class:`ArrivalRequirement`.
 
@@ -246,7 +256,13 @@ def _requirement_from_event(
     else:
         event_start = event.start
 
-    arrival_deadline = event_start - timedelta(minutes=profile.margins.arrival)
+    main_link = link if link is not None else profile.main_link
+    margin = (
+        main_link.arrival_margin
+        if main_link is not None and main_link.arrival_margin is not None
+        else profile.margins.arrival
+    )
+    arrival_deadline = event_start - timedelta(minutes=margin)
     return ArrivalRequirement(
         mission_id=make_mission_id(profile.id, d),
         person_id=profile.id,
@@ -254,6 +270,8 @@ def _requirement_from_event(
         event_id=event.uid,
         event_start=event_start,
         arrival_deadline=arrival_deadline,
-        destination_id=profile.destination_id,
+        destination_id=profile.default_location_id,
         source=event.source_id,
+        slot="morning",
+        link_id=main_link.link_id if main_link is not None else None,
     )

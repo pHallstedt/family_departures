@@ -22,7 +22,6 @@ from custom_components.family_departures.models import (
     Margins,
     MissionState,
     ProfileConfig,
-    SourceFilter,
 )
 from custom_components.family_departures.planner import (
     REASON_KEPT_PREVIOUS_JOURNEY,
@@ -52,12 +51,7 @@ def _profile(
     return ProfileConfig(
         id="kid_a",
         name="Kid A",
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(),
-        destination_id="school",
-        dest_lat=59.3,
-        dest_lon=18.0,
+        default_location_id="school",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,

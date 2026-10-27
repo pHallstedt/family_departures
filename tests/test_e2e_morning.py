@@ -35,10 +35,13 @@ from custom_components.family_departures.const import (
 )
 from custom_components.family_departures.coordinator import (
     FamilyDeparturesCoordinator,
+    MissionResult,
     ProfileResult,
     ProviderFactories,
 )
+from custom_components.family_departures.household import migrate_v1_to_v2
 from custom_components.family_departures.models import (
+    CalendarSource,
     DurationResult,
     Journey,
     JourneyResult,
@@ -129,17 +132,20 @@ def _profile_dict(
 
 
 def _entry(profiles: Mapping[str, dict[str, Any]]) -> MockConfigEntry:
+    data = {
+        DATA_HOUSEHOLD_NAME: "Familjen",
+        DATA_HOME_LAT: HOME[0],
+        DATA_HOME_LON: HOME[1],
+        DATA_ICS_URLS: {pid: f"https://example.test/{pid}" for pid in profiles},
+    }
+    new_data, new_options = migrate_v1_to_v2(data, {OPT_PROFILES: dict(profiles)})
     return MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
         title="Familjen",
-        data={
-            DATA_HOUSEHOLD_NAME: "Familjen",
-            DATA_HOME_LAT: HOME[0],
-            DATA_HOME_LON: HOME[1],
-            DATA_ICS_URLS: {pid: f"https://example.test/{pid}" for pid in profiles},
-        },
-        options={OPT_PROFILES: dict(profiles)},
+        version=2,
+        data=new_data,
+        options=new_options,
     )
 
 
@@ -233,6 +239,9 @@ class FakeCoordinator:
 
         return _remove
 
+    def attendee_aliases(self, profile: Any) -> frozenset[str]:
+        return frozenset()
+
 
 def _lesson(uid: str, summary: str, hour: int, minute: int) -> ScheduleEvent:
     start = combine_local(TODAY, time(hour, minute))
@@ -311,8 +320,8 @@ async def _build(
     store = FamilyDeparturesStore(hass, entry.entry_id)
     await store.async_load(now=start_at)
 
-    def make_schedule(profile: ProfileConfig, ics_url: str | None) -> FakeSchedule:
-        return schedules[profile.id]
+    def make_schedule(calendar: CalendarSource, ics_url: str | None) -> FakeSchedule:
+        return schedules[calendar.id.removesuffix("_calendar")]
 
     factories = ProviderFactories(
         schedule=make_schedule,
@@ -675,24 +684,19 @@ async def test_evening_summary_and_packing_fire_the_night_before(
     """
     from custom_components.family_departures.models import (
         ArrivalRequirement,
+        CalendarLink,
         DeparturePlan,
         Margins,
         MissionState,
         PackingList,
         PackingRule,
         RequirementOutcome,
-        SourceFilter,
     )
 
     profile = ProfileConfig(
         id="kid_a",
         name="Kid A",
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(exclude_patterns=(), include_patterns=()),
-        destination_id="kid_a_destination",
-        dest_lat=59.4,
-        dest_lon=18.1,
+        default_location_id="kid_a_destination",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,
@@ -709,6 +713,9 @@ async def test_evening_summary_and_packing_fire_the_night_before(
         quiet_start=time(22, 0),
         quiet_end=time(6, 0),
         scripts={"push": "script.push_kid_a"},
+        calendar_links=(
+            CalendarLink(link_id="main", calendar_id="kid_a_calendar", role="main"),
+        ),
         evening_notice_enabled=True,
     )
     mission_id = make_mission_id("kid_a", TODAY)
@@ -752,21 +759,33 @@ async def test_evening_summary_and_packing_fire_the_night_before(
         items=("Gympakläder",),
         acknowledged=(),
     )
+    # The clock is the evening before: the round's "today" is the day before the
+    # mission and the mission is tomorrow's preview, which feeds the digest.
+    evening_schedule = ScheduleResult(status="ok", events=(), fetched_at=MORNING)
     result = ProfileResult(
         profile=profile,
         outcome=outcome,
-        plan=plan,
-        packing=packing,
-        local_date=TODAY,
-        schedule=ScheduleResult(status="ok", events=(), fetched_at=MORNING),
+        plan=None,
+        packing=PackingList(
+            person_id="kid_a",
+            local_date=TODAY - timedelta(days=1),
+            items=(),
+            acknowledged=(),
+        ),
+        local_date=TODAY - timedelta(days=1),
+        schedule=evening_schedule,
+        tomorrow_plan=plan,
+        tomorrow_packing=packing,
+        tomorrow_schedule=evening_schedule,
+        tomorrow_missions=(MissionResult(link_id="main", plan=plan),),
     )
 
     store = FamilyDeparturesStore(hass, "entry-evening")
     await store.async_load()
     # The scheduler derives packing from the stored schedule, so persist a PE
-    # lesson for the mission's source/date (spec §5.5).
+    # lesson under the profile's calendar id for the date (spec §5.5, plan §4.1).
     store.set_schedule(
-        "kid_a_destination",
+        "kid_a_calendar",
         TODAY,
         _schedule(_lesson("e1", "Lektion IDRO1000X", 8, 20), now=MORNING),
     )
@@ -779,6 +798,18 @@ async def test_evening_summary_and_packing_fire_the_night_before(
             notified={},
             first_published_leave=rec,
             action_nonce="nonce123",
+        )
+    )
+    digest_id = make_mission_id("kid_a", TODAY, "day")
+    store.set_mission(
+        MissionState(
+            mission_id=digest_id,
+            status="scheduled",
+            departed_at=None,
+            reopened=False,
+            notified={},
+            first_published_leave=None,
+            action_nonce="digest-nonce",
         )
     )
     coord = FakeCoordinator({"kid_a": result})
@@ -805,7 +836,16 @@ async def test_evening_summary_and_packing_fire_the_night_before(
         for intent in batch
         if intent.kind == KIND_EVENING
     ]
-    assert evening_intents
-    assert "Gympakläder" in evening_intents[0].packing_items
+    assert len(evening_intents) == 1
+    digest = evening_intents[0]
+    assert digest.mission_id == digest_id
+    assert digest.slot == "day"
+    assert "Gympakläder" in digest.packing_items
+    assert digest.message == "08:20 Skola – gå 07:30\nPacka: Gympakläder"
+    # The morning mission's ledger notes what the person was told, so change
+    # alerts compare against the digest's departure time.
+    morning = store.get_mission(mission_id)
+    assert morning is not None
+    assert morning.notified[KIND_EVENING].leave_time == rec
 
     await scheduler.async_shutdown()

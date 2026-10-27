@@ -16,6 +16,7 @@ fakes, so the registry, devices, states and attributes are exercised end to end:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
@@ -29,13 +30,17 @@ from custom_components.family_departures.const import (
     DOMAIN,
     OPT_PROFILES,
 )
-from custom_components.family_departures.coordinator import ProviderFactories
+from custom_components.family_departures.coordinator import (
+    MissionResult,
+    ProviderFactories,
+)
+from custom_components.family_departures.household import migrate_v1_to_v2
 from custom_components.family_departures.models import (
+    CalendarSource,
     DurationResult,
     Journey,
     JourneyResult,
     Leg,
-    ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
 )
@@ -188,19 +193,44 @@ def _profile_dict(profile_id: str, *, default_mode: str = "public_transport") ->
     }
 
 
+def _v2(profiles: Mapping[str, dict]) -> tuple[dict, dict]:
+    """Migrate a v1 profile map to the v2 (data, options) the entry stores."""
+    data = {
+        DATA_HOUSEHOLD_NAME: "Familjen",
+        DATA_HOME_LAT: HOME[0],
+        DATA_HOME_LON: HOME[1],
+        DATA_ICS_URLS: {pid: SECRET_ICS_URL for pid in profiles},
+    }
+    return migrate_v1_to_v2(data, {OPT_PROFILES: dict(profiles)})
+
+
 def _make_entry(profiles: Mapping[str, dict]) -> MockConfigEntry:
+    new_data, new_options = _v2(profiles)
     return MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
         title="Familjen",
-        data={
-            DATA_HOUSEHOLD_NAME: "Familjen",
-            DATA_HOME_LAT: HOME[0],
-            DATA_HOME_LON: HOME[1],
-            DATA_ICS_URLS: {pid: SECRET_ICS_URL for pid in profiles},
-        },
-        options={OPT_PROFILES: dict(profiles)},
+        version=2,
+        data=new_data,
+        options=new_options,
     )
+
+
+class _FakeLunch:
+    """A lunch provider that returns a fixed menu for any date."""
+
+    def __init__(self, dishes: tuple[str, ...]) -> None:
+        self._dishes = dishes
+
+    async def async_get_lunch(self, d):
+        from custom_components.family_departures.models import LunchMenu
+
+        return LunchMenu(
+            local_date=d,
+            status="ok" if self._dishes else "empty",
+            dishes=self._dishes,
+            fetched_at=NOW,
+        )
 
 
 def _patch_factories(
@@ -208,6 +238,7 @@ def _patch_factories(
     *,
     journey: _FakeJourney | None = None,
     car: _FakeCar | None = None,
+    lunch: _FakeLunch | None = None,
 ):
     """Patch the coordinator's default factories to inject the fakes."""
     journey = journey or _FakeJourney(_transit_result())
@@ -215,14 +246,15 @@ def _patch_factories(
         DurationResult(minutes=20.0, fetched_at=NOW, source="waze", quality="realtime")
     )
 
-    def make_schedule(profile: ProfileConfig, ics_url: str | None) -> _FakeSchedule:
-        return schedules[profile.id]
+    def make_schedule(calendar: CalendarSource, ics_url: str | None) -> _FakeSchedule:
+        return schedules[calendar.id.removesuffix("_calendar")]
 
     def _factory(hass: HomeAssistant) -> ProviderFactories:
         return ProviderFactories(
             schedule=make_schedule,
             journey=lambda: journey,
             car=lambda: car,
+            lunch=(lambda entity_id: lunch) if lunch else None,
         )
 
     return patch.object(coordinator_mod, "_default_factories", _factory)
@@ -276,6 +308,8 @@ async def test_entity_set_and_device_per_profile(hass: HomeAssistant) -> None:
         "kid_a_packing_list",
         "kid_a_packing_list_tomorrow",
         "kid_a_default_transport",
+        "kid_a_missions_today",
+        "kid_a_missions_tomorrow",
         "kid_a_departure_disruption",
         "kid_a_schedule_needs_review",
         "kid_a_today_transport",
@@ -329,12 +363,11 @@ async def test_unique_ids_survive_rename(hass: HomeAssistant) -> None:
     }
     assert before
 
-    # Rename the profile in options and reload.
+    # Rename the profile in options and reload (v2 options shape).
     new_profiles = {"kid_a": {**_profile_dict("kid_a"), "name": "Kid A Renamed"}}
+    _, new_options = _v2(new_profiles)
     with _patch_factories(schedules):
-        hass.config_entries.async_update_entry(
-            entry, options={OPT_PROFILES: new_profiles}
-        )
+        hass.config_entries.async_update_entry(entry, options=new_options)
         await hass.async_block_till_done()
 
     after = {
@@ -460,7 +493,8 @@ async def test_attributes_have_no_url_or_coordinates(hass: HomeAssistant) -> Non
         assert "token=" not in blob, entity_entry.entity_id
         # Nor the precise home coordinate.
         assert str(HOME[0]) not in blob, entity_entry.entity_id
-        assert str(entry.data[DATA_ICS_URLS]["kid_a"]) not in blob
+        # The URL is stored under the calendar id in v2.
+        assert str(entry.data[DATA_ICS_URLS]["kid_a_calendar"]) not in blob
 
 
 async def test_entities_unload_cleanly(hass: HomeAssistant) -> None:
@@ -500,3 +534,107 @@ async def test_notifications_switch_toggles_option(hass: HomeAssistant) -> None:
 
     stored = entry.options[OPT_PROFILES]["kid_a"]["notifications_enabled"]
     assert stored is False
+
+
+async def test_missions_sensors_and_review_reasons(hass: HomeAssistant) -> None:
+    """Missions sensors list every mission; mission warnings flag the review sensor."""
+    entry = _make_entry({"kid_a": _profile_dict("kid_a")})
+    schedules = {"kid_a": _FakeSchedule(_ok_schedule())}
+    with _patch_factories(schedules):
+        await _setup(hass, entry)
+
+    missions_today = _entity_id(hass, entry, "kid_a_missions_today")
+    state = hass.states.get(missions_today)
+    assert state is not None and state.state == "1"
+    # Tomorrow's preview does not exist before 18:00: unknown, not "0".
+    tomorrow = hass.states.get(_entity_id(hass, entry, "kid_a_missions_tomorrow"))
+    assert tomorrow is not None and tomorrow.state == "unknown"
+    review = hass.states.get(_entity_id(hass, entry, "kid_a_schedule_needs_review"))
+    assert review is not None and review.state == "off"
+
+    coordinator = entry.runtime_data.coordinator
+    result = coordinator.data["kid_a"]
+    main = result.plan
+    assert main is not None
+    extra_id = make_mission_id("kid_a", TODAY, "x-club-k1")
+    extra = replace(
+        main,
+        mission_id=extra_id,
+        plan_id=f"{extra_id}:1",
+        requirement=replace(
+            main.requirement,
+            mission_id=extra_id,
+            slot="x-club-k1",
+            label="Fotboll",
+            destination_name="Planen",
+            warnings=("home_gap_too_short",),
+        ),
+    )
+    coordinator.async_set_updated_data(
+        {
+            "kid_a": replace(
+                result,
+                missions=(
+                    MissionResult(link_id="main", plan=main),
+                    MissionResult(link_id="club", plan=extra),
+                ),
+            )
+        }
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(missions_today)
+    assert state is not None and state.state == "2"
+    summaries = state.attributes["missions"]
+    assert [m["slot"] for m in summaries] == ["morning", "x-club-k1"]
+    assert summaries[1]["label"] == "Fotboll"
+    assert summaries[1]["destination"] == "Planen"
+    assert summaries[1]["warnings"] == ["home_gap_too_short"]
+    review = hass.states.get(_entity_id(hass, entry, "kid_a_schedule_needs_review"))
+    assert review is not None and review.state == "on"
+    assert review.attributes["reasons"] == ["home_gap_too_short"]
+    status = hass.states.get(_entity_id(hass, entry, "kid_a_departure_status"))
+    assert status is not None and status.attributes["slot"] == "morning"
+
+
+async def test_lunch_sensor_exists_only_with_a_lunch_calendar_and_shows_the_menu(
+    hass: HomeAssistant,
+) -> None:
+    """The lunch sensor shows tomorrow's dishes; a menu-less day shows nothing."""
+    with_lunch = _profile_dict("kid_a")
+    with_lunch["lunch_calendar_entity_id"] = "calendar.skolmat"
+    entry = _make_entry({"kid_a": with_lunch, "kid_b": _profile_dict("kid_b")})
+    schedules = {
+        "kid_a": _FakeSchedule(_ok_schedule()),
+        "kid_b": _FakeSchedule(_ok_schedule()),
+    }
+    with _patch_factories(schedules, lunch=_FakeLunch(("Pasta", "Sallad"))):
+        await _setup(hass, entry)
+
+    ent_reg = er.async_get(hass)
+    assert (
+        ent_reg.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}_kid_b_lunch_tomorrow"
+        )
+        is None
+    )
+    state = hass.states.get(_entity_id(hass, entry, "kid_a_lunch_tomorrow"))
+    assert state is not None
+    assert state.state == "Pasta, Sallad"
+    assert state.attributes["dishes"] == ["Pasta", "Sallad"]
+    assert state.attributes["status"] == "ok"
+    assert state.attributes["date"] == "2026-10-21"
+
+
+async def test_lunch_sensor_is_empty_when_there_is_no_menu(hass: HomeAssistant) -> None:
+    profile = _profile_dict("kid_a")
+    profile["lunch_calendar_entity_id"] = "calendar.skolmat"
+    entry = _make_entry({"kid_a": profile})
+    schedules = {"kid_a": _FakeSchedule(_ok_schedule())}
+    with _patch_factories(schedules, lunch=_FakeLunch(())):
+        await _setup(hass, entry)
+
+    state = hass.states.get(_entity_id(hass, entry, "kid_a_lunch_tomorrow"))
+    assert state is not None
+    assert state.state == "unknown"
+    assert state.attributes["status"] == "empty"

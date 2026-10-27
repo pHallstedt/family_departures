@@ -24,7 +24,7 @@ from homeassistant.util import dt as dt_util
 from . import FamilyDeparturesConfigEntry
 from .coordinator import FamilyDeparturesCoordinator
 from .entity import FamilyDeparturesEntity
-from .timeutil import local_date_of, make_mission_id
+from .timeutil import local_date_of
 
 
 async def async_setup_entry(
@@ -105,7 +105,9 @@ class _MarkDepartedButton(_ProfileButton):
         if result is None or result.plan is None:
             return
         now = dt_util.utcnow()
-        mission_id = make_mission_id(self._profile_id, self._today())
+        # The active mission: after the school mission is done the next
+        # activity takes over the button.
+        mission_id = result.plan.mission_id
         store = self.coordinator._store
         state = store.get_mission(mission_id)
         if state is None:

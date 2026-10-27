@@ -11,13 +11,13 @@ from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
 from custom_components.family_departures.models import (
+    CalendarLink,
     DayOverride,
     Margins,
     MissionState,
     ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
-    SourceFilter,
 )
 from custom_components.family_departures.schedule import (
     REASON_ARRIVAL_OVERRIDE,
@@ -72,12 +72,7 @@ def _profile(
     return ProfileConfig(
         id="kid_b",
         name="Kid B",
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(),
-        destination_id="school",
-        dest_lat=59.3,
-        dest_lon=18.0,
+        default_location_id="school",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,
@@ -388,3 +383,45 @@ def test_error_and_empty_resolve_differently() -> None:
     assert error.day_status == "source_error"
     assert empty.day_status == "no_schedule"
     assert error.day_status != empty.day_status
+
+
+# --- link parameter (plan §4.2) -----------------------------------------------
+
+
+def test_link_arrival_margin_overrides_profile_margin() -> None:
+    d = date(2026, 10, 1)
+    link = CalendarLink(
+        link_id="school", calendar_id="c", role="main", arrival_margin=15
+    )
+    outcome = select_requirement(
+        _profile(arrival=5),
+        d,
+        _result(_event(d, 8, 20, summary="Lektion", uid="a")),
+        None,
+        False,
+        None,
+        None,
+        NOW,
+        link,
+    )
+    assert outcome.requirement is not None
+    assert outcome.requirement.arrival_deadline == _local(d, 8, 5)
+    assert outcome.requirement.link_id == "school"
+
+
+def test_link_without_margin_falls_back_to_profile_margin() -> None:
+    d = date(2026, 10, 1)
+    link = CalendarLink(link_id="school", calendar_id="c", role="main")
+    outcome = select_requirement(
+        _profile(arrival=5),
+        d,
+        _result(_event(d, 8, 20, summary="Lektion", uid="a")),
+        None,
+        False,
+        None,
+        None,
+        NOW,
+        link,
+    )
+    assert outcome.requirement is not None
+    assert outcome.requirement.arrival_deadline == _local(d, 8, 15)

@@ -58,6 +58,7 @@ MOBILE_APP_ACTION_EVENT: Final = "mobile_app_notification_action"
 ACTION_DEPARTED: Final = "FD_DEPARTED"
 ACTION_PACKED: Final = "FD_PACKED"
 ACTION_OFF: Final = "FD_OFF"
+ACTION_SKIP: Final = "FD_SKIP"
 
 # Per-channel script call timeout so one slow or stuck channel cannot block the
 # others or the dashboard (spec §12.2).
@@ -80,9 +81,14 @@ DEFAULT_CHANGE_THRESHOLD_MINUTES: Final = 3
 # so the household notices a feed that is persistently down (spec §15).
 FETCH_FAILURE_THRESHOLD: Final = 3
 
-# Repairs issue ids/translation keys. The concrete issue id is suffixed with the
-# profile id so one broken source does not hide another (spec §15: one profile's
-# problem must not take down the whole entry).
+# Repairs issue ids/translation keys. The source-health issues are suffixed with
+# the *calendar id* so a calendar shared by several profiles raises one issue,
+# not one per profile (plan §4.1, §8). ``missing_destination`` stays per profile
+# for now and ``profile_without_person`` is per profile (D3). One broken source
+# never takes down the whole entry (spec §15).
 ISSUE_INVALID_SOURCE: Final = "invalid_source"
 ISSUE_MISSING_DESTINATION: Final = "missing_destination"
 ISSUE_REPEATED_FETCH_FAILURE: Final = "repeated_fetch_failure"
+# A profile not bound to a Home Assistant ``person.*`` entity (D3): it still
+# works but cannot match attendee tags in shared calendars, so flag it.
+ISSUE_PROFILE_WITHOUT_PERSON: Final = "profile_without_person"

@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
-from ..models import DurationResult, JourneyResult, ScheduleResult
+from ..models import DurationResult, JourneyResult, LunchMenu, ScheduleResult
 
 
 @runtime_checkable
@@ -50,4 +50,13 @@ class CarProvider(Protocol):
         time_delta: timedelta | None,
     ) -> DurationResult:
         """Return the travel duration for the given origin/destination."""
+        ...
+
+
+@runtime_checkable
+class LunchProvider(Protocol):
+    """Reads one local day's lunch menu."""
+
+    async def async_get_lunch(self, d: date) -> LunchMenu:
+        """Return the menu for the given local date."""
         ...

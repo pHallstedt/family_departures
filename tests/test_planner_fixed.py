@@ -17,7 +17,6 @@ from custom_components.family_departures.models import (
     Margins,
     MissionState,
     ProfileConfig,
-    SourceFilter,
 )
 from custom_components.family_departures.planner import (
     RAIN_SURCHARGE_MINUTES,
@@ -52,12 +51,7 @@ def _profile(
     return ProfileConfig(
         id="parent_b",
         name="Parent B",
-        source_type="ha_calendar",
-        calendar_entity_id="calendar.parent_b",
-        source_filter=SourceFilter(),
-        destination_id="work",
-        dest_lat=59.3,
-        dest_lon=18.0,
+        default_location_id="work",
         default_mode=mode,  # type: ignore[arg-type]
         static_minutes=static_minutes,
         static_label=static_label,

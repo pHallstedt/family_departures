@@ -13,19 +13,20 @@ is injected, so no wall clock is read.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.family_departures.models import (
     ArrivalRequirement,
     DeparturePlan,
+    LunchMenu,
     Margins,
     MissionState,
     NotifiedRecord,
     PackingList,
     ProfileConfig,
     Quality,
-    SourceFilter,
 )
 from custom_components.family_departures.notification_policy import (
     KIND_CHANGE,
@@ -36,9 +37,12 @@ from custom_components.family_departures.notification_policy import (
     KIND_MORNING,
     KIND_PACKING,
     KIND_REMINDER,
+    KIND_REMOVED,
     REASON_IMPROVEMENT,
     REASON_WORSENING,
     evaluate,
+    evaluate_day_digest,
+    evaluate_removed,
 )
 
 TZ = ZoneInfo("Europe/Stockholm")
@@ -54,6 +58,7 @@ def _profile(
     *,
     notifications_enabled: bool = True,
     evening_notice_enabled: bool = True,
+    lunch_in_digest: bool = True,
     change_threshold: int = 3,
     quiet_start: time = time(21, 0),
     quiet_end: time = time(6, 0),
@@ -62,12 +67,7 @@ def _profile(
     return ProfileConfig(
         id="kid_b",
         name="Kid B",
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(),
-        destination_id="school",
-        dest_lat=59.3,
-        dest_lon=18.0,
+        default_location_id="school",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,
@@ -85,6 +85,7 @@ def _profile(
         quiet_end=quiet_end,
         scripts=scripts if scripts is not None else {"push": "script.kid_b_push"},
         evening_notice_enabled=evening_notice_enabled,
+        lunch_in_digest=lunch_in_digest,
     )
 
 
@@ -309,87 +310,154 @@ def test_reminder_passes_quiet_hours() -> None:
     assert KIND_REMINDER in _kinds(intents)
 
 
-# --- Evening and packing ---------------------------------------------------
+# --- Day-before digest -------------------------------------------------------
+
+DIGEST_ID = "kid_b:2026-10-20:day"
+EVENING = _utc(date(2026, 10, 19), 20, 0)
 
 
-def test_evening_includes_tomorrow_packing() -> None:
-    """At 20:00 the day before, the evening notice carries the packing list."""
-    rec = _utc(DAY, 7, 32)
-    evening_now = _utc(date(2026, 10, 19), 20, 0)
-    intents = evaluate(
-        None,
-        _plan(recommended=rec),
-        _state(),
-        _packing(items=("Gympakläder",)),
-        _profile(),
-        now=evening_now,
+def _digest_state(notified: dict[str, NotifiedRecord] | None = None) -> MissionState:
+    return replace(_state(notified=notified), mission_id=DIGEST_ID)
+
+
+def _digest(
+    plans: list[DeparturePlan],
+    *,
+    items: tuple[str, ...] = (),
+    profile: ProfileConfig | None = None,
+    state: MissionState | None = None,
+    legacy: MissionState | None = None,
+    lunch: LunchMenu | None = None,
+    now: datetime = EVENING,
+) -> list:
+    return evaluate_day_digest(
+        profile or _profile(),
+        DAY,
+        plans,
+        _packing(items=items),
+        lunch,
+        state or _digest_state(),
+        legacy,
+        now,
     )
-    evening = next(i for i in intents if i.kind == KIND_EVENING)
-    assert evening.packing_items == ("Gympakläder",)
-    assert "Gympakläder" in evening.message
 
 
-def test_packing_only_notice_when_evening_disabled() -> None:
-    """Evening summary off → a packing-only notice at 20:00 (§5.5, §12.1)."""
-    rec = _utc(DAY, 7, 32)
-    evening_now = _utc(date(2026, 10, 19), 20, 0)
-    intents = evaluate(
-        None,
-        _plan(recommended=rec),
-        _state(),
-        _packing(items=("Gympakläder",)),
-        _profile(evening_notice_enabled=False),
-        now=evening_now,
+def _school_plan() -> DeparturePlan:
+    return _plan(recommended=_utc(DAY, 7, 45))
+
+
+def test_digest_lists_missions_in_start_order_with_packing_and_warning() -> None:
+    football = replace(
+        _extra_plan(_utc(DAY, 16, 55)),
+        requirement=replace(
+            _extra_plan(_utc(DAY, 16, 55)).requirement,
+            warnings=("home_gap_too_short",),
+        ),
     )
-    kinds = _kinds(intents)
-    assert KIND_PACKING in kinds
-    assert KIND_EVENING not in kinds
-    packing = next(i for i in intents if i.kind == KIND_PACKING)
-    assert packing.packing_items == ("Gympakläder",)
-    assert "Gympakläder" in packing.message
+    [digest] = _digest([football, _school_plan()], items=("Gympakläder",))
+
+    assert digest.kind == KIND_EVENING
+    assert digest.mission_id == DIGEST_ID
+    assert digest.slot == "day"
+    assert digest.tag == f"departure_{DIGEST_ID}"
+    assert digest.action_nonce == "nonce-1"
+    assert digest.message.split("\n") == [
+        "08:20 Skola – gå 07:45",
+        "17:30 Fotboll → Planen – gå 16:55 ⚠ kort tid hemma",
+        "Packa: Gympakläder",
+    ]
+    assert digest.packing_items == ("Gympakläder",)
+    # The headline departure is the earliest one.
+    assert digest.recommended_leave_time == _utc(DAY, 7, 45)
 
 
-def test_no_packing_only_notice_without_items() -> None:
-    """Evening off and nothing to pack → neither evening nor packing notice."""
-    rec = _utc(DAY, 7, 32)
-    evening_now = _utc(date(2026, 10, 19), 20, 0)
-    intents = evaluate(
-        None,
-        _plan(recommended=rec),
-        _state(),
-        _packing(items=()),
-        _profile(evening_notice_enabled=False),
-        now=evening_now,
+def test_digest_includes_lunch_when_known() -> None:
+    lunch = LunchMenu(
+        local_date=DAY,
+        status="ok",
+        dishes=("Pasta", "Sallad"),
+        fetched_at=_utc(DAY, 6, 0),
     )
-    assert KIND_PACKING not in _kinds(intents)
-    assert KIND_EVENING not in _kinds(intents)
+    [digest] = _digest([_school_plan()], lunch=lunch)
+    assert digest.message.endswith("Lunch imorgon: Pasta, Sallad")
+    assert digest.lunch_menu == "Lunch imorgon: Pasta, Sallad"
+
+    empty = replace(lunch, status="empty", dishes=())
+    [no_lunch] = _digest([_school_plan()], lunch=empty)
+    assert "Lunch" not in no_lunch.message
+
+    # A failed lunch source never holds back the digest, it just has no line.
+    failed = replace(lunch, status="error", dishes=())
+    [on_time] = _digest([_school_plan()], lunch=failed)
+    assert "Lunch" not in on_time.message
 
 
-def test_evening_summary_sent_when_enabled_not_packing_only() -> None:
-    """With evening enabled, the full summary is sent, not the packing-only one."""
-    rec = _utc(DAY, 7, 32)
-    evening_now = _utc(date(2026, 10, 19), 20, 0)
-    intents = evaluate(
-        None,
-        _plan(recommended=rec),
-        _state(),
-        _packing(items=("Gympakläder",)),
-        _profile(evening_notice_enabled=True),
-        now=evening_now,
+def test_digest_leaves_lunch_out_when_off_or_without_a_school_day() -> None:
+    lunch = LunchMenu(
+        local_date=DAY, status="ok", dishes=("Pasta",), fetched_at=_utc(DAY, 6, 0)
     )
-    kinds = _kinds(intents)
-    assert KIND_EVENING in kinds
-    assert KIND_PACKING not in kinds
-
-
-def test_evening_held_inside_quiet_hours() -> None:
-    """A next-day evening notice is held once inside quiet hours (§12.1)."""
-    rec = _utc(DAY, 7, 32)
-    late_now = _utc(date(2026, 10, 19), 22, 0)  # past quiet-start 21:00
-    intents = evaluate(
-        None, _plan(recommended=rec), _state(), _packing(), _profile(), now=late_now
+    [off] = _digest(
+        [_school_plan()], lunch=lunch, profile=_profile(lunch_in_digest=False)
     )
-    assert KIND_EVENING not in _kinds(intents)
+    assert "Lunch" not in off.message
+    assert off.lunch_menu is None
+
+    [no_school] = _digest([_extra_plan(_utc(DAY, 16, 55))], lunch=lunch)
+    assert "Lunch" not in no_school.message
+    assert no_school.lunch_menu is None
+
+
+def test_digest_is_packing_only_when_evening_notice_is_off() -> None:
+    profile = _profile(evening_notice_enabled=False)
+    [digest] = _digest([_school_plan()], items=("Gympakläder",), profile=profile)
+    assert digest.kind == KIND_PACKING
+    assert digest.message == "Imorgon: packa Gympakläder."
+    assert _digest([_school_plan()], profile=profile) == []
+
+
+def test_digest_needs_a_mission_and_notifications() -> None:
+    assert _digest([]) == []
+    assert (
+        _digest([_school_plan()], profile=_profile(notifications_enabled=False)) == []
+    )
+
+
+def test_digest_is_held_inside_quiet_hours_and_before_twenty() -> None:
+    plans = [_school_plan()]
+    assert _digest(plans, now=_utc(date(2026, 10, 19), 19, 59)) == []
+    quiet = _profile(quiet_start=time(20, 0), quiet_end=time(6, 0))
+    assert _digest(plans, profile=quiet) == []
+    # Never on the day itself.
+    assert _digest(plans, now=_utc(DAY, 20, 30)) == []
+
+
+def test_digest_is_sent_once() -> None:
+    sent = {
+        KIND_EVENING: NotifiedRecord(
+            kind=KIND_EVENING, sent_at=EVENING, leave_time=None, revision=1
+        )
+    }
+    assert _digest([_school_plan()], state=_digest_state(sent)) == []
+
+
+def test_digest_is_not_resent_after_an_upgrade_when_legacy_morning_has_it() -> None:
+    legacy = _state(
+        notified={
+            KIND_EVENING: NotifiedRecord(
+                kind=KIND_EVENING, sent_at=EVENING, leave_time=None, revision=1
+            )
+        }
+    )
+    assert _digest([_school_plan()], legacy=legacy) == []
+    # An unrelated record on the legacy mission does not suppress it.
+    other = _state(
+        notified={
+            KIND_MORNING: NotifiedRecord(
+                kind=KIND_MORNING, sent_at=EVENING, leave_time=None, revision=1
+            )
+        }
+    )
+    assert len(_digest([_school_plan()], legacy=other)) == 1
 
 
 def test_packing_absent_after_acknowledgement() -> None:
@@ -584,3 +652,157 @@ def test_intent_channels_come_from_profile_scripts() -> None:
     )
     leave_now = next(i for i in intents if i.kind == KIND_LEAVE_NOW)
     assert set(leave_now.channels) == {"push", "live_update"}
+
+
+# --- Extra-link missions (plan item 6) --------------------------------------
+
+EXTRA_MISSION = "kid_b:2026-10-20:x-club-k1"
+
+
+def _extra_plan(recommended: datetime) -> DeparturePlan:
+    start = _utc(DAY, 17, 30)
+    req = ArrivalRequirement(
+        mission_id=EXTRA_MISSION,
+        person_id="kid_b",
+        local_date=DAY,
+        event_id="f1",
+        event_start=start,
+        arrival_deadline=start,
+        destination_id="pitch",
+        source="club",
+        slot="x-club-k1",
+        link_id="club",
+        label="Fotboll",
+        destination_name="Planen",
+    )
+    return replace(
+        _plan(recommended=recommended, requirement=req), mission_id=EXTRA_MISSION
+    )
+
+
+def test_extra_mission_title_names_activity_and_destination() -> None:
+    rec = _utc(DAY, 17, 0)
+    intents = evaluate(
+        None,
+        _extra_plan(rec),
+        replace(_state(), mission_id=EXTRA_MISSION),
+        _packing(items=("Gympakläder",)),
+        _profile(),
+        now=rec,
+    )
+    leave_now = next(i for i in intents if i.kind == KIND_LEAVE_NOW)
+    assert leave_now.title == "Kid B – Fotboll 17:30"
+    assert leave_now.message.endswith("→ Planen")
+    assert leave_now.slot == "x-club-k1"
+    assert leave_now.tag == f"departure_{EXTRA_MISSION}"
+
+
+def test_extra_mission_notices_carry_the_packing_list() -> None:
+    """Packing rides on every mission's morning notice until acknowledged (§6.1)."""
+    rec = _utc(DAY, 17, 0)
+    intents = evaluate(
+        None,
+        _extra_plan(rec),
+        replace(_state(), mission_id=EXTRA_MISSION),
+        _packing(items=("Gympakläder",)),
+        _profile(),
+        now=rec - timedelta(minutes=50),
+    )
+    morning = next(i for i in intents if i.kind == KIND_MORNING)
+    assert morning.packing_items == ("Gympakläder",)
+
+
+def test_leave_message_names_a_non_default_destination_only() -> None:
+    rec = _utc(DAY, 17, 0)
+    profile = _profile()
+    extra = _extra_plan(rec)
+    [leave_now] = [
+        i
+        for i in evaluate(
+            None,
+            extra,
+            replace(_state(), mission_id=EXTRA_MISSION),
+            _packing(),
+            profile,
+            now=rec,
+        )
+        if i.kind == KIND_LEAVE_NOW
+    ]
+    assert leave_now.message.endswith(" → Planen")
+    # At the profile's own default location nothing is appended.
+    at_default = replace(
+        extra,
+        requirement=replace(extra.requirement, destination_id="school"),
+    )
+    [again] = [
+        i
+        for i in evaluate(
+            None,
+            at_default,
+            replace(_state(), mission_id=EXTRA_MISSION),
+            _packing(),
+            profile,
+            now=rec,
+        )
+        if i.kind == KIND_LEAVE_NOW
+    ]
+    assert "→" not in again.message
+
+
+def _told(*kinds: str) -> MissionState:
+    sent = _utc(DAY, 16, 0)
+    return replace(
+        _state(),
+        mission_id=EXTRA_MISSION,
+        notified={
+            kind: NotifiedRecord(kind=kind, sent_at=sent, leave_time=sent, revision=1)
+            for kind in kinds
+        },
+    )
+
+
+def test_removed_event_sends_removed_and_cleanup_after_a_leave_notice() -> None:
+    plan = _extra_plan(_utc(DAY, 17, 0))
+    intents = evaluate_removed(plan, _told(KIND_MORNING), _profile(), _utc(DAY, 16, 30))
+    # Cleanup first: it shares the tag and would otherwise clear the notice.
+    assert [i.kind for i in intents] == [KIND_CLEANUP, KIND_REMOVED]
+    assert intents[1].message == "Fotboll 17:30 är borttagen ur kalendern."
+
+
+def test_removed_event_is_silent_when_nobody_was_told() -> None:
+    plan = _extra_plan(_utc(DAY, 17, 0))
+    assert evaluate_removed(plan, _told(), _profile(), _utc(DAY, 16, 30)) == []
+    # Only evening-type or leave_now records are not leave notices either.
+    assert (
+        evaluate_removed(plan, _told(KIND_LEAVE_NOW), _profile(), _utc(DAY, 16, 30))
+        == []
+    )
+
+
+def test_removed_event_is_sent_once_and_never_after_the_event_started() -> None:
+    plan = _extra_plan(_utc(DAY, 17, 0))
+    profile = _profile()
+    assert (
+        evaluate_removed(
+            plan, _told(KIND_MORNING, KIND_REMOVED), profile, _utc(DAY, 16, 30)
+        )
+        == []
+    )
+    assert evaluate_removed(plan, _told(KIND_MORNING), profile, _utc(DAY, 17, 30)) == []
+    assert (
+        evaluate_removed(
+            plan,
+            _told(KIND_MORNING),
+            _profile(notifications_enabled=False),
+            _utc(DAY, 16, 30),
+        )
+        == []
+    )
+
+
+def test_removed_event_skips_cleanup_already_sent() -> None:
+    plan = _extra_plan(_utc(DAY, 17, 0))
+    intents = evaluate_removed(
+        plan, _told(KIND_MORNING, KIND_CLEANUP), _profile(), _utc(DAY, 16, 30)
+    )
+    assert [i.kind for i in intents] == [KIND_REMOVED]

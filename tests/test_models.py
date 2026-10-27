@@ -8,14 +8,22 @@ from datetime import UTC, date, datetime, time
 import pytest
 from custom_components.family_departures.models import (
     ArrivalRequirement,
+    CalendarLink,
+    CalendarSource,
     DayOverride,
     DeparturePlan,
     DurationResult,
+    EventTags,
+    HouseholdConfig,
     JourneyResult,
     Leg,
+    LinkRule,
+    Location,
+    LunchMenu,
     MarginBreakdown,
     Margins,
     MissionState,
+    NotificationIntent,
     ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
@@ -99,12 +107,7 @@ def _profile(**overrides: object) -> ProfileConfig:
     base: dict[str, object] = dict(
         id="kid_a",
         name="Kid A",
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(),
-        destination_id="school",
-        dest_lat=59.0,
-        dest_lon=18.0,
+        default_location_id="school",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,
@@ -267,3 +270,214 @@ def test_mission_state_rejects_naive_departed_at() -> None:
             first_published_leave=None,
             action_nonce="n",
         )
+
+
+# --- New pure models (step 1) ---------------------------------------------
+
+
+def test_event_tags_defaults_empty() -> None:
+    tags = EventTags()
+    assert tags.location is None
+    assert tags.transport is None
+    assert tags.attendees == ()
+
+
+def test_schedule_event_additive_fields_default() -> None:
+    event = ScheduleEvent(uid="u", summary="s", start=T0, end=T1, source_id="src")
+    assert event.location is None
+    assert event.tags == EventTags()
+    assert event.occurrence_key is None
+
+
+def test_schedule_event_trims_and_caps_location() -> None:
+    event = ScheduleEvent(
+        uid="u",
+        summary="s",
+        start=T0,
+        end=T1,
+        source_id="src",
+        location="  " + "x" * 100 + "  ",
+    )
+    assert event.location is not None
+    assert len(event.location) == 80
+
+
+def test_schedule_event_blank_location_becomes_none() -> None:
+    event = ScheduleEvent(
+        uid="u", summary="s", start=T0, end=T1, source_id="src", location="   "
+    )
+    assert event.location is None
+
+
+def test_location_rejects_negative_static_minutes() -> None:
+    with pytest.raises(ValueError, match="static_minutes"):
+        Location(id="loc", name="Pool", lat=59.0, lon=18.0, static_minutes=-1)
+
+
+def test_location_defaults() -> None:
+    loc = Location(id="loc", name="Pool", lat=59.0, lon=18.0)
+    assert loc.aliases == ()
+    assert loc.static_minutes is None
+
+
+def test_calendar_source_rejects_bad_type() -> None:
+    with pytest.raises(ValueError, match="source_type"):
+        CalendarSource(id="c", name="Schema", source_type="webcal")  # type: ignore[arg-type]
+
+
+def test_calendar_source_defaults_entity_none() -> None:
+    cal = CalendarSource(id="c", name="Schema", source_type="ics")
+    assert cal.calendar_entity_id is None
+
+
+def test_link_rule_rejects_bad_mode() -> None:
+    with pytest.raises(ValueError, match="mode"):
+        LinkRule(match="Simning", mode="plane")  # type: ignore[arg-type]
+
+
+def test_calendar_link_rejects_bad_role() -> None:
+    with pytest.raises(ValueError, match="role"):
+        CalendarLink(link_id="l1", calendar_id="c1", role="primary")  # type: ignore[arg-type]
+
+
+def test_calendar_link_rejects_bad_attendee_mode() -> None:
+    with pytest.raises(ValueError, match="attendee_mode"):
+        CalendarLink(
+            link_id="l1",
+            calendar_id="c1",
+            role="extra",
+            attendee_mode="only_me",  # type: ignore[arg-type]
+        )
+
+
+def test_calendar_link_rejects_bad_mode() -> None:
+    with pytest.raises(ValueError, match="mode"):
+        CalendarLink(link_id="l1", calendar_id="c1", role="extra", mode="boat")  # type: ignore[arg-type]
+
+
+def test_calendar_link_rejects_negative_arrival_margin() -> None:
+    with pytest.raises(ValueError, match="arrival_margin"):
+        CalendarLink(link_id="l1", calendar_id="c1", role="extra", arrival_margin=-5)
+
+
+def test_calendar_link_rejects_negative_static_minutes() -> None:
+    with pytest.raises(ValueError, match="static_minutes"):
+        CalendarLink(link_id="l1", calendar_id="c1", role="extra", static_minutes=-1)
+
+
+def test_calendar_link_defaults() -> None:
+    link = CalendarLink(link_id="l1", calendar_id="c1", role="main")
+    assert link.label == ""
+    assert link.source_filter == SourceFilter()
+    assert link.attendee_mode == "all"
+    assert link.location_id is None
+    assert link.mode is None
+    assert link.rules == ()
+    assert link.match_event_location is False
+    assert link.show_summary is False
+
+
+def test_calendar_link_slot_for_is_colon_and_pipe_free() -> None:
+    link = CalendarLink(link_id="football", calendar_id="c1", role="extra")
+    slot = link.slot_for("abc123def4")
+    assert slot == "x-football-abc123def4"
+    assert ":" not in slot
+    assert "|" not in slot
+
+
+def test_lunch_menu_rejects_bad_status() -> None:
+    with pytest.raises(ValueError, match="status"):
+        LunchMenu(
+            local_date=date(2026, 10, 1),
+            status="pending",  # type: ignore[arg-type]
+            dishes=(),
+            fetched_at=T0,
+        )
+
+
+def test_lunch_menu_rejects_naive_fetched_at() -> None:
+    with pytest.raises(ValueError, match="fetched_at"):
+        LunchMenu(
+            local_date=date(2026, 10, 1),
+            status="ok",
+            dishes=("Pannkakor",),
+            fetched_at=datetime(2026, 10, 1),
+        )
+
+
+def test_household_config_holds_registries() -> None:
+    loc = Location(id="school", name="Skola", lat=59.0, lon=18.0)
+    cal = CalendarSource(id="c1", name="Schema", source_type="ics")
+    household = HouseholdConfig(
+        home=(59.3, 18.0),
+        locations={"school": loc},
+        calendars={"c1": cal},
+        profiles={"kid_a": _profile()},
+    )
+    assert household.home == (59.3, 18.0)
+    assert household.locations["school"] is loc
+    assert household.calendars["c1"] is cal
+    assert household.profiles["kid_a"].id == "kid_a"
+
+
+def test_arrival_requirement_additive_fields_default() -> None:
+    req = _requirement()
+    assert req.slot == "morning"
+    assert req.link_id is None
+    assert req.mode is None
+    assert req.label is None
+    assert req.destination_name is None
+    assert req.warnings == ()
+
+
+def test_arrival_requirement_rejects_bad_mode() -> None:
+    with pytest.raises(ValueError, match="mode"):
+        ArrivalRequirement(
+            mission_id="m",
+            person_id="kid_a",
+            local_date=date(2026, 10, 1),
+            event_id="e1",
+            event_start=T1,
+            arrival_deadline=T0,
+            destination_id="school",
+            source="ics",
+            mode="submarine",  # type: ignore[arg-type]
+        )
+
+
+def test_notification_intent_additive_fields_default() -> None:
+    intent = NotificationIntent(
+        person_id="kid_a",
+        mission_id="m",
+        plan_id="p",
+        revision=1,
+        notification_id="n",
+        kind="morning",
+        severity="info",
+        title="t",
+        message="msg",
+        recommended_leave_time=None,
+        latest_leave_time=None,
+        quality="scheduled",
+        reason_codes=(),
+        packing_items=(),
+        channels=(),
+        tag="tag",
+        action_nonce="nonce",
+    )
+    assert intent.lunch_menu is None
+    assert intent.slot == "morning"
+
+
+def test_calendar_link_slot_for_sanitises_hostile_keys() -> None:
+    link = CalendarLink(link_id="club", calendar_id="c1", role="extra")
+    slot = link.slot_for("k:1|2")
+    assert slot == "x-club-k-1-2"
+    assert ":" not in slot
+    assert "|" not in slot
+
+
+@pytest.mark.parametrize("bad", ["", "a:b", "a|b", "a b", "å"])
+def test_calendar_link_rejects_ids_that_break_mission_id_parsing(bad: str) -> None:
+    with pytest.raises(ValueError, match="link_id"):
+        CalendarLink(link_id=bad, calendar_id="c1", role="extra")

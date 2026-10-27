@@ -9,7 +9,7 @@ and makes sure every decision is recorded in the Store before the dispatcher
 What it does (spec §11.1 timing, §11.3 timers/restart):
 
 * For every published :class:`DeparturePlan` it computes the mission's trigger
-  points — the evening notice at 20:00 the day before, the −60 min morning
+  points — the −60 min morning
   notice, the −10 min reminder, the recommended-leave "go now" and the hard
   timeout at ``event_start + 60 min`` — and registers an
   ``async_track_point_in_utc_time`` wake-up for each future one (spec §10, §11.1).
@@ -28,9 +28,10 @@ What it does (spec §11.1 timing, §11.3 timers/restart):
   applies and no stale "go now" is sent (spec §11.3). The same stale filter
   (:func:`_drop_stale`) runs on every path, so a setup late in the day never
   sends a "morning" or "go now" for a mission that is already over.
-* Tomorrow's preview plan (published by the coordinator from 18:00) is treated
-  as one more mission, which is what the 20:00 evening/packing notice is
-  evaluated against (spec §5.5, §12.1). Only those two kinds are sent for it.
+* Tomorrow's preview (published by the coordinator from 18:00) is not a set of
+  missions to notify but the input of one *day-before digest* per profile, a
+  ``person:d:day`` mission with its own 20:00 point timer and ledger (plan
+  §6.2). Tomorrow's missions send nothing else until their own day.
 * A new coordinator round is evaluated right away, not only on the next tick,
   so a round that moves the departure earlier past ``now`` still gets its
   "go now" out before ``latest_leave``.
@@ -47,8 +48,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 
 from homeassistant.core import HassJob, HomeAssistant, callback
 from homeassistant.helpers.event import (
@@ -60,6 +61,7 @@ from homeassistant.util import dt as dt_util
 from .coordinator import FamilyDeparturesCoordinator
 from .models import (
     DeparturePlan,
+    LunchMenu,
     MissionState,
     NotificationIntent,
     NotifiedRecord,
@@ -67,19 +69,20 @@ from .models import (
     ProfileConfig,
 )
 from .notification_policy import (
+    DIGEST_SLOT,
     EVENING_HOUR,
     KIND_CLEANUP,
-    KIND_EVENING,
     KIND_LEAVE_NOW,
     KIND_MORNING,
-    KIND_PACKING,
     MORNING_LEAD_MINUTES,
     REMINDER_LEAD_MINUTES,
     evaluate,
+    evaluate_day_digest,
+    evaluate_removed,
 )
 from .packing import build_packing_list
 from .store import FamilyDeparturesStore
-from .timeutil import TZ
+from .timeutil import TZ, make_mission_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -190,6 +193,13 @@ class NotificationScheduler:
         self._note_round(plans)
         now = dt_util.utcnow()
         self._rearm_all(now)
+        removed = self._removed_missions(plans, now)
+        if removed:
+            self._hass.async_create_task(
+                self._async_notify_removed(removed, now),
+                "family_departures removed missions",
+                eager_start=False,
+            )
         # Evaluate the new round right away instead of waiting up to 60 s for
         # the tick: a round that moves the departure earlier past ``now`` may
         # leave only a minute or two before ``latest_leave`` (spec §11.3).
@@ -205,6 +215,22 @@ class NotificationScheduler:
             return
         for mission_id in list(self._current_plans()):
             await self._async_evaluate_mission(mission_id, now)
+        for digest_id in list(self._current_digests()):
+            await self._async_evaluate_digest(digest_id, now)
+
+    async def _async_evaluate_digest(self, digest_id: str, now: datetime) -> None:
+        """Run the day-before digest policy and record+dispatch what is due."""
+        if self._shutdown:
+            return
+        digest = self._current_digests().get(digest_id)
+        if digest is None:
+            return
+        due = self._digest_intents(digest, now)
+        if due is None:
+            return
+        state, intents = due
+        self._record_digest(digest, state, intents, now)
+        await self._dispatch(intents)
 
     def _note_round(self, plans: dict[str, DeparturePlan]) -> None:
         """Shift last → previous for every mission whose plan object changed."""
@@ -223,21 +249,159 @@ class NotificationScheduler:
     # -- Timer arming -------------------------------------------------------
 
     def _current_plans(self) -> dict[str, DeparturePlan]:
-        """Today's plans plus tomorrow's preview plans, keyed by mission id.
+        """Every mission of today, by mission id.
 
-        Tomorrow's preview (published from 18:00) is what the 20:00 evening and
-        packing notices are evaluated against (spec §5.5, §12.1). Today's plan
-        is inserted last so it wins on a mission id clash.
+        Tomorrow's preview is not included: it only feeds the day-before digest
+        (:meth:`_current_digests`); its missions notify on their own day.
         """
         data = self._coordinator.data or {}
         plans: dict[str, DeparturePlan] = {}
         for result in data.values():
-            if result.tomorrow_plan is not None:
-                plans[result.tomorrow_plan.mission_id] = result.tomorrow_plan
-        for result in data.values():
-            if result.plan is not None:
+            if result.missions:
+                for mission in result.missions:
+                    plans[mission.plan.mission_id] = mission.plan
+            elif result.plan is not None:
                 plans[result.plan.mission_id] = result.plan
         return plans
+
+    def _removed_missions(
+        self, plans: dict[str, DeparturePlan], now: datetime
+    ) -> list[tuple[DeparturePlan, MissionState, ProfileConfig]]:
+        """Today's extra missions that left the calendar after a leave notice.
+
+        Derived from the Store, so it survives a restart: a stored extra
+        mission of today that is no longer published, whose profile was
+        processed this round, whose link is still configured and did not fail
+        to fetch, whose event is gone from the link's *unfiltered* calendar day
+        (not just from the profile's filtered view), and whose person is not
+        off or sick (that closes missions
+        rather than removing events). :func:`evaluate_removed` then decides
+        whether anyone was actually told about it.
+        """
+        data = self._coordinator.data or {}
+        today = now.astimezone(TZ).date()
+        removed: list[tuple[DeparturePlan, MissionState, ProfileConfig]] = []
+        for mission_id, state in list(self._store.data.missions.items()):
+            if mission_id in plans or ":x-" not in mission_id:
+                continue
+            stored = self._store.get_plan(mission_id)
+            if stored is None or stored.requirement.local_date != today:
+                continue
+            req = stored.requirement
+            result = data.get(req.person_id)
+            if result is None or result.local_date != today:
+                continue
+            profile = result.profile
+            if req.link_id is None or req.link_id in result.failed_extra_links:
+                continue
+            link = next(
+                (lk for lk in profile.calendar_links if lk.link_id == req.link_id),
+                None,
+            )
+            if link is None:
+                continue
+            # Still in the calendar but out of the profile's view (a link filter
+            # was edited, an attendee alias is not resolved yet): not removed.
+            raw_day = self._store.get_schedule(link.calendar_id, today)
+            if raw_day is not None and any(
+                event.uid == req.event_id for event in raw_day.events
+            ):
+                continue
+            override = self._store.get_override(req.person_id, today)
+            if override is not None and override.attendance in ("off", "sick"):
+                continue
+            removed.append((stored, state, profile))
+        return removed
+
+    async def _async_notify_removed(
+        self,
+        removed: list[tuple[DeparturePlan, MissionState, ProfileConfig]],
+        now: datetime,
+    ) -> None:
+        """Send the one-off ``removed`` + ``cleanup`` pair per vanished mission."""
+        if self._shutdown:
+            return
+        for plan, state, profile in removed:
+            # Re-read: the ledger may have changed while the task was queued.
+            current = self._store.get_mission(plan.mission_id) or state
+            intents = evaluate_removed(plan, current, profile, now)
+            if not intents:
+                continue
+            self._record_sent(current, intents, now)
+            await self._dispatch(intents)
+
+    def _current_digests(self) -> dict[str, _Digest]:
+        """One day-before digest per profile whose tomorrow has missions."""
+        data = self._coordinator.data or {}
+        digests: dict[str, _Digest] = {}
+        for result in data.values():
+            plans = tuple(m.plan for m in result.tomorrow_missions)
+            if not plans:
+                continue
+            day = plans[0].requirement.local_date
+            mission_id = make_mission_id(result.profile.id, day, DIGEST_SLOT)
+            packing = result.tomorrow_packing or build_packing_list(
+                result.profile.id, day, (), (), None, ()
+            )
+            digests[mission_id] = _Digest(
+                lunch=result.lunch_tomorrow,
+                mission_id=mission_id,
+                profile=result.profile,
+                day=day,
+                plans=plans,
+                packing=packing,
+            )
+        return digests
+
+    def _digest_intents(
+        self, digest: _Digest, now: datetime
+    ) -> tuple[MissionState, list[NotificationIntent]] | None:
+        """The digest's due intents with its ledger state, or ``None``."""
+        state = self._store.get_mission(digest.mission_id)
+        if state is None:
+            return None
+        legacy = self._store.get_mission(make_mission_id(digest.profile.id, digest.day))
+        intents = evaluate_day_digest(
+            digest.profile,
+            digest.day,
+            digest.plans,
+            digest.packing,
+            digest.lunch,
+            state,
+            legacy,
+            now,
+        )
+        return (state, intents) if intents else None
+
+    def _record_digest(
+        self,
+        digest: _Digest,
+        state: MissionState,
+        intents: list[NotificationIntent],
+        now: datetime,
+    ) -> None:
+        """Ledger the digest, and note it on each mission it told about.
+
+        The per-mission record keeps change alerts comparing against the leave
+        time the person was actually told in the digest, as the evening notice
+        always did, rather than against the first preview.
+        """
+        self._record_sent(state, intents, now)
+        kind = intents[0].kind
+        for plan in digest.plans:
+            mission = self._store.get_mission(plan.mission_id)
+            if mission is None or kind in mission.notified:
+                continue
+            notified = {
+                **mission.notified,
+                kind: NotifiedRecord(
+                    kind=kind,
+                    sent_at=now,
+                    leave_time=plan.recommended_leave,
+                    revision=plan.revision,
+                ),
+            }
+            self._store.set_mission(replace(mission, notified=notified))
 
     def _profiles(self) -> dict[str, ProfileConfig]:
         """Profile config keyed by person id, from the published round."""
@@ -247,14 +411,45 @@ class NotificationScheduler:
     def _rearm_all(self, now: datetime) -> None:
         """(Re)register timers for every current plan; drop vanished missions."""
         plans = self._current_plans()
-        # Cancel timers for missions that are no longer published.
+        digests = self._current_digests()
+        # Cancel timers for missions and digests that are no longer published.
         for mission_id in list(self._timers):
-            if mission_id not in plans:
+            if mission_id not in plans and mission_id not in digests:
                 self._cancel_mission_timers(mission_id)
         for mission_id, plan in plans.items():
             if self._armed_revision.get(mission_id) == plan.revision:
                 continue
             self._arm_mission(plan, now)
+        for digest_id, digest in digests.items():
+            # The 20:00 wake-up does not depend on the plans: arm it once.
+            if digest_id not in self._timers:
+                self._arm_digest(digest, now)
+
+    def _arm_digest(self, digest: _Digest, now: datetime) -> None:
+        """Register the digest's 20:00 point timer on the day before."""
+        when = _digest_time(digest.day)
+        cancels: list[Callable[[], None]] = []
+        if when > now:
+            cancels.append(
+                async_track_point_in_utc_time(
+                    self._hass,
+                    HassJob(
+                        self._make_digest_callback(digest.mission_id),
+                        "family_departures digest timer",
+                        cancel_on_shutdown=True,
+                    ),
+                    when,
+                )
+            )
+        self._timers[digest.mission_id] = cancels
+
+    def _make_digest_callback(
+        self, digest_id: str
+    ) -> Callable[[datetime], Coroutine[object, object, None]]:
+        async def _point(fire_time: datetime) -> None:
+            await self._async_evaluate_digest(digest_id, dt_util.utcnow())
+
+        return _point
 
     def _arm_mission(self, plan: DeparturePlan, now: datetime) -> None:
         """Register the mission's future trigger times (spec §10, §11.1)."""
@@ -350,7 +545,7 @@ class NotificationScheduler:
 
         # Record the ledger before dispatch so dedup survives a crash between
         # sending and journalling (spec §11.3).
-        self._record_sent(state, intents, plan, now)
+        self._record_sent(state, intents, now)
         await self._dispatch(intents)
 
     def _packing_for(self, plan: DeparturePlan) -> PackingList:
@@ -362,21 +557,34 @@ class NotificationScheduler:
         has no schedule for the mission's source.
         """
         req = plan.requirement
-        schedule = self._store.get_schedule(req.destination_id, req.local_date)
-        events = schedule.events if schedule is not None else ()
         profile = self._profiles().get(req.person_id)
-        rules = profile.packing_rules if profile is not None else ()
+        if profile is None:
+            return build_packing_list(req.person_id, req.local_date, (), (), None, ())
+        # Read the profile's day across its calendar links from the shared cache
+        # (plan §4.1), replacing the old per-profile destination_id read.
+        from .day_events import profile_day_events
+
+        events = profile_day_events(
+            self._store,
+            profile,
+            req.local_date,
+            self._coordinator.attendee_aliases(profile),
+        )
         override = self._store.get_override(req.person_id, req.local_date)
         acknowledged = self._store.get_packing_acks(req.person_id, req.local_date)
         return build_packing_list(
-            req.person_id, req.local_date, events, rules, override, acknowledged
+            req.person_id,
+            req.local_date,
+            events,
+            profile.packing_rules,
+            override,
+            acknowledged,
         )
 
     def _record_sent(
         self,
         state: MissionState,
         intents: list[NotificationIntent],
-        plan: DeparturePlan,
         now: datetime,
     ) -> None:
         """Write a :class:`NotifiedRecord` per intent into the ledger (spec §11.3)."""
@@ -386,7 +594,7 @@ class NotificationScheduler:
                 kind=intent.kind,
                 sent_at=now,
                 leave_time=intent.recommended_leave_time,
-                revision=plan.revision,
+                revision=intent.revision,
             )
         self._store.set_mission(replace(state, notified=notified))
 
@@ -422,7 +630,15 @@ class NotificationScheduler:
             intents = _drop_stale(intents, plan, now, catch_up=True)
             if not intents:
                 continue
-            self._record_sent(state, intents, plan, now)
+            self._record_sent(state, intents, now)
+            await self._dispatch(intents)
+
+        for digest in self._current_digests().values():
+            due = self._digest_intents(digest, now)
+            if due is None:
+                continue
+            state, intents = due
+            self._record_digest(digest, state, intents, now)
             await self._dispatch(intents)
 
 
@@ -445,9 +661,9 @@ def _drop_stale(
     setup or restart late in the day never sends a stale "morning" or "go now"
     for a mission whose departure has long passed:
 
-    * a mission for a later day (tomorrow's preview) only gets the evening or
-      packing notice; its preliminary plan follows evening traffic, so change
-      and critical alerts wait for the trip's own day (spec §5.5, §12.1);
+    * a mission for a later day gets nothing: its preliminary plan follows
+      evening traffic, so change and critical alerts wait for the trip's own
+      day (spec §5.5, §12.1); the day-before digest has its own path;
     * past the mission timeout (``event_start + 60 min``) only ``cleanup`` is
       still sent;
     * ``morning`` is dropped once the recommended departure has passed;
@@ -465,7 +681,7 @@ def _drop_stale(
     the thresholds and the tick within 60 s of them.
     """
     if plan.requirement.local_date > now.astimezone(TZ).date():
-        return [i for i in intents if i.kind in (KIND_EVENING, KIND_PACKING)]
+        return []
 
     timeout = plan.requirement.event_start + timedelta(minutes=MISSION_TIMEOUT_MINUTES)
     rec = plan.recommended_leave
@@ -519,21 +735,15 @@ def _moved_past_now(
 def _trigger_times(plan: DeparturePlan) -> list[datetime]:
     """Return a mission's wake-up times in UTC (spec §10, §11.1).
 
-    The evening notice fires at 20:00 local on the day before the trip; the
-    morning, reminder and leave-now wake-ups are relative to the recommended
+    The morning, reminder and leave-now wake-ups are relative to the recommended
     departure; the hard timeout fires 60 min after the event starts and lets the
     local tick evaluate the mission one last time (closing it, spec §10). Static
-    or unplanned missions with no recommended departure still get the evening
-    and timeout wake-ups.
+    or unplanned missions with no recommended departure still get the timeout
+    wake-up. The 20:00 day-before wake-up belongs to the digest, not to a
+    mission (:func:`_digest_time`).
     """
     times: list[datetime] = []
     req = plan.requirement
-    evening_local = datetime.combine(
-        req.local_date - timedelta(days=1),
-        datetime.min.time().replace(hour=EVENING_HOUR),
-        tzinfo=TZ,
-    )
-    times.append(evening_local.astimezone(UTC))
 
     rec = plan.recommended_leave
     if rec is not None:
@@ -543,6 +753,28 @@ def _trigger_times(plan: DeparturePlan) -> list[datetime]:
 
     times.append(req.event_start + timedelta(minutes=MISSION_TIMEOUT_MINUTES))
     return times
+
+
+def _digest_time(day: date) -> datetime:
+    """20:00 local on the day before ``day``, in UTC (plan §6.2)."""
+    evening = datetime.combine(
+        day - timedelta(days=1),
+        datetime.min.time().replace(hour=EVENING_HOUR),
+        tzinfo=TZ,
+    )
+    return evening.astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class _Digest:
+    """One profile's day-before digest input, from tomorrow's preview."""
+
+    mission_id: str
+    profile: ProfileConfig
+    day: date
+    plans: tuple[DeparturePlan, ...]
+    packing: PackingList
+    lunch: LunchMenu | None = None
 
 
 __all__ = [

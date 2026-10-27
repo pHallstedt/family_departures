@@ -147,6 +147,98 @@ def test_parse_invalid_data_raises() -> None:
 
 
 # --------------------------------------------------------------------------
+# Enrichment: location, tags and occurrence_key (plan §4.4, §5)
+# --------------------------------------------------------------------------
+
+
+def test_tags_parsed_from_description_and_bracket_summary() -> None:
+    """DESCRIPTION and bracket tags are parsed; the raw summary is unchanged."""
+    events = parse_ics(
+        _read("tagged_activities.ics"),
+        date(2026, 10, 19),
+        SourceFilter(),
+        "activities",
+    )
+    by_uid = {e.uid: e for e in events}
+
+    football = by_uid["activity-location-tag"]
+    assert football.tags.location == "Fotbollsplanen"
+    assert football.tags.transport == "cykel"
+    assert football.tags.attendees == ("Barn A", "Barn B")
+    # Raw LOCATION is kept (capped), distinct from the plats: override.
+    assert football.location == "Sporthall A"
+
+    swimming = by_uid["activity-bracket-tag"]
+    assert swimming.tags.location == "Badhuset"
+    assert swimming.tags.transport == "kollektivt"
+
+
+def test_raw_description_absent_from_schedule_event() -> None:
+    """The raw DESCRIPTION never reaches ScheduleEvent (plan §5.3, §10)."""
+    events = parse_ics(
+        _read("tagged_activities.ics"),
+        date(2026, 10, 19),
+        SourceFilter(),
+        "activities",
+    )
+    # ScheduleEvent exposes no description field at all.
+    assert not hasattr(events[0], "description")
+
+
+def test_location_is_capped_at_80_chars() -> None:
+    from custom_components.family_departures.models import ScheduleEvent
+
+    event = ScheduleEvent(
+        uid="x",
+        summary="s",
+        start=datetime(2026, 10, 19, 6, 20, tzinfo=UTC),
+        end=datetime(2026, 10, 19, 7, 0, tzinfo=UTC),
+        source_id="activities",
+        location="A" * 200,
+    )
+    assert event.location is not None
+    assert len(event.location) == 80
+
+
+def test_occurrence_key_is_stable_and_present() -> None:
+    """Every event gets a non-empty occurrence key."""
+    events = parse_ics(
+        _read("tagged_activities.ics"),
+        date(2026, 10, 19),
+        SourceFilter(),
+        "activities",
+    )
+    assert all(e.occurrence_key for e in events)
+
+
+def test_moved_ics_event_keeps_occurrence_key() -> None:
+    """A RECURRENCE-ID override keeps the key of the un-moved occurrence."""
+    f = SourceFilter()
+    week_two_original = date(2026, 10, 27)
+    moved = parse_ics(
+        _read("tagged_activities.ics"), week_two_original, f, "activities"
+    )
+    assert len(moved) == 1
+    # The override moved the start from 17:00 to 19:00 but keeps its mission.
+    assert moved[0].start == datetime(2026, 10, 27, 18, 0, tzinfo=UTC)
+
+    # The key is derived from uid + recurrence_id (the original slot), so it is
+    # identical to the key a non-moved occurrence of that day would have had.
+    from custom_components.family_departures.providers.ics import _occurrence_key
+
+    unmoved_key = _occurrence_key("activity-weekly", "Träning", "20261027T170000")
+    assert moved[0].occurrence_key == unmoved_key
+
+
+def test_two_occurrences_of_series_have_distinct_keys_across_days() -> None:
+    """Two days of a weekly series get distinct keys (recurrence id differs)."""
+    f = SourceFilter()
+    day_one = parse_ics(_read("tagged_activities.ics"), date(2026, 10, 20), f, "a")
+    day_two = parse_ics(_read("tagged_activities.ics"), date(2026, 10, 27), f, "a")
+    assert day_one[0].occurrence_key != day_two[0].occurrence_key
+
+
+# --------------------------------------------------------------------------
 # disappeared_uids
 # --------------------------------------------------------------------------
 
@@ -371,3 +463,52 @@ async def test_fetch_log_contains_no_url_path(
     assert "PLACEHOLDER" not in log_text
     assert "ical-feed/parent" not in log_text
     assert HOST in log_text
+
+
+def _single_event_ics(start: str, end: str) -> bytes:
+    return (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n"
+        "BEGIN:VEVENT\r\nUID:practice-1@club.example\r\n"
+        "DTSTAMP:20261001T000000Z\r\n"
+        f"DTSTART;TZID=Europe/Stockholm:{start}\r\n"
+        f"DTEND;TZID=Europe/Stockholm:{end}\r\n"
+        "SUMMARY:Träning\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    ).encode()
+
+
+def test_moved_event_keeps_its_occurrence_key() -> None:
+    """Plan §4.4/U8: ICS UIDs survive a time edit, so a moved event keeps its
+    key (and its mission) instead of looking removed plus new."""
+    day = date(2026, 10, 20)
+    before = parse_ics(
+        _single_event_ics("20261020T170000", "20261020T180000"),
+        day,
+        SourceFilter(),
+        SOURCE_ID,
+    )
+    after = parse_ics(
+        _single_event_ics("20261020T180000", "20261020T190000"),
+        day,
+        SourceFilter(),
+        SOURCE_ID,
+    )
+    assert before[0].uid == after[0].uid
+    assert before[0].occurrence_key == after[0].occurrence_key
+
+
+def test_same_uid_twice_in_a_day_gets_distinct_keys() -> None:
+    ics = (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//test//EN\r\n"
+        + "".join(
+            "BEGIN:VEVENT\r\nUID:twice@club.example\r\nDTSTAMP:20261001T000000Z\r\n"
+            f"DTSTART;TZID=Europe/Stockholm:20261020T{hh}0000\r\n"
+            f"DTEND;TZID=Europe/Stockholm:20261020T{hh + 1}0000\r\n"
+            "SUMMARY:Pass\r\nEND:VEVENT\r\n"
+            for hh in (10, 15)
+        )
+        + "END:VCALENDAR\r\n"
+    ).encode()
+    events = parse_ics(ics, date(2026, 10, 20), SourceFilter(), SOURCE_ID)
+    first, second = (e.occurrence_key for e in events)
+    assert first and second and first != second
+    assert second == f"{first}-2"

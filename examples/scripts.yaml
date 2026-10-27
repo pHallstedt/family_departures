@@ -10,7 +10,10 @@
 #   person_id, plan_id, revision, notification_id, kind, severity, title,
 #   message, recommended_leave_time, latest_leave_time (ISO-8601 UTC or null),
 #   quality, reason_codes (list), packing_items (list), channels (list),
-#   tag (stable per mission), action_nonce.
+#   lunch_menu ("Lunch imorgon: …" on a digest with a menu, else null; already
+#   part of message), tag (stable per mission), action_nonce, is_copy (+ copy_of_person_id,
+#   copy_of_name, recipient_person_id on a copy), slot ("morning", "x-<link>-<key>"
+#   or "day" for the day-before digest).
 #
 # Nothing secret is passed: no ICS URLs, tokens, coordinates or raw calendar
 # text. Keep it that way in your own scripts (spec §12.4).
@@ -41,6 +44,18 @@ fd_push_parent_a:
       description: Nonce bound to the mission; echoed back in button actions.
     packing_items:
       description: Still-pending packing items (may be empty).
+    lunch_menu:
+      description: >-
+        The digest's lunch line, or empty. It is already included in message.
+    is_copy:
+      description: >-
+        True when this push is a copy of someone else's notice (for example a
+        parent receiving what a child was told). Also set then: copy_of_person_id,
+        copy_of_name and recipient_person_id.
+    slot:
+      description: >-
+        "morning" for the main mission, "x-..." for an activity, "day" for the
+        day-before digest.
   sequence:
     - variables:
         # Everything after the first "departure_" segment is the mission id;
@@ -48,8 +63,10 @@ fd_push_parent_a:
         mission_id: "{{ tag | replace('departure_', '') }}"
         # Live Update only where the phone supports it (Android 16+). Flip the
         # input_boolean per phone; default off = plain status push fallback.
+        # A copy is only information: no Live Update, no countdown, no buttons.
+        copy: "{{ is_copy | default(false) }}"
         use_live_update: >-
-          {{ is_state('input_boolean.fd_live_update_parent_a', 'on') }}
+          {{ is_state('input_boolean.fd_live_update_parent_a', 'on') and not copy }}
         # Privacy mode hides schedule details late in the evening / on request.
         privacy: >-
           {{ is_state('input_boolean.fd_privacy_mode', 'on') }}
@@ -79,17 +96,37 @@ fd_push_parent_a:
               # Harmless on phones that ignore it; enables Live Update on 16+.
               live_update: "{{ use_live_update }}"
               # Chronometer counts down locally instead of per-second pushes.
-              chronometer: true
+              chronometer: "{{ not copy }}"
               # Importance follows severity so quiet info does not buzz.
               importance: >-
                 {{ 'high' if kind in ['leave_now', 'critical'] else 'default' }}
               actions: >-
-                {% set acts = [
-                  {'action': 'FD_DEPARTED|' ~ mission_id ~ '|' ~ action_nonce,
-                   'title': 'Jag går nu'},
-                  {'action': 'FD_OFF|' ~ mission_id ~ '|' ~ action_nonce,
-                   'title': 'Ledig idag'}
-                ] %}
+                {# A copy carries the kid's nonce: show no buttons at all. #}
+                {% if copy %}
+                  {{ [] }}
+                {% else %}
+                {# Digest and removed notices are not trips: no "go now". #}
+                {% set trip = kind not in ['evening', 'packing', 'removed'] %}
+                {% set acts = [] %}
+                {% if trip %}
+                  {% set acts = acts + [
+                    {'action': 'FD_DEPARTED|' ~ mission_id ~ '|' ~ action_nonce,
+                     'title': 'Jag går nu'}
+                  ] %}
+                {% endif %}
+                {# An activity can be skipped on its own; the school mission not. #}
+                {% if trip and slot.startswith('x-') %}
+                  {% set acts = acts + [
+                    {'action': 'FD_SKIP|' ~ mission_id ~ '|' ~ action_nonce,
+                     'title': 'Hoppa över'}
+                  ] %}
+                {% endif %}
+                {% if kind != 'removed' %}
+                  {% set acts = acts + [
+                    {'action': 'FD_OFF|' ~ mission_id ~ '|' ~ action_nonce,
+                     'title': 'Ledig idag' if trip else 'Ledig imorgon'}
+                  ] %}
+                {% endif %}
                 {% if packing_items %}
                   {% set acts = acts + [
                     {'action': 'FD_PACKED|' ~ mission_id ~ '|' ~ action_nonce,
@@ -97,6 +134,7 @@ fd_push_parent_a:
                   ] %}
                 {% endif %}
                 {{ acts }}
+                {% endif %}
 
 # ---------------------------------------------------------------------------
 # Family-chat channel – bundled text only, no per-mission countdowns (§12.4).

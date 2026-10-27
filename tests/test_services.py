@@ -18,6 +18,7 @@ checked end to end:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from unittest.mock import patch
 
@@ -32,13 +33,16 @@ from custom_components.family_departures.const import (
     DOMAIN,
     OPT_PROFILES,
 )
-from custom_components.family_departures.coordinator import ProviderFactories
+from custom_components.family_departures.coordinator import (
+    MissionResult,
+    ProviderFactories,
+)
 from custom_components.family_departures.models import (
+    CalendarSource,
     DurationResult,
     Journey,
     JourneyResult,
     Leg,
-    ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
 )
@@ -201,8 +205,8 @@ def _patch_factories(
         DurationResult(minutes=20.0, fetched_at=NOW, source="waze", quality="realtime")
     )
 
-    def make_schedule(profile: ProfileConfig, ics_url: str | None) -> _FakeSchedule:
-        return schedules[profile.id]
+    def make_schedule(calendar: CalendarSource, ics_url: str | None) -> _FakeSchedule:
+        return schedules[calendar.id.removesuffix("_calendar")]
 
     def _factory(hass: HomeAssistant) -> ProviderFactories:
         return ProviderFactories(
@@ -529,3 +533,96 @@ async def test_reopen_today_unlocks_departed_mission(hass: HomeAssistant) -> Non
     mission = coordinator._store.get_mission(make_mission_id("kid_a", TODAY))
     assert mission is not None
     assert mission.reopened is True
+
+
+# ---------------------------------------------------------------------------
+# Several missions per profile (plan item 6)
+# ---------------------------------------------------------------------------
+
+EXTRA_SLOT = "x-club-k1"
+EXTRA_MISSION = make_mission_id("kid_a", TODAY, EXTRA_SLOT)
+
+
+async def _with_extra_mission(hass: HomeAssistant):
+    """The single-mission setup plus an injected second (extra-link) mission."""
+    entry = await _setup_transit(hass)
+    coordinator = entry.runtime_data.coordinator
+    result = coordinator.data["kid_a"]
+    main = result.plan
+    assert main is not None
+    extra = replace(
+        main,
+        mission_id=EXTRA_MISSION,
+        plan_id=f"{EXTRA_MISSION}:1",
+        requirement=replace(
+            main.requirement, mission_id=EXTRA_MISSION, slot=EXTRA_SLOT
+        ),
+    )
+    coordinator._store.set_mission(
+        replace(
+            coordinator._store.get_mission(main.mission_id), mission_id=EXTRA_MISSION
+        )
+    )
+    coordinator._store.set_plan(extra)
+    coordinator.data = {
+        "kid_a": replace(
+            result,
+            missions=(
+                MissionResult(link_id="main", plan=main),
+                MissionResult(link_id="club", plan=extra),
+            ),
+        )
+    }
+    return coordinator, main, extra
+
+
+async def test_mark_departed_addresses_a_non_active_mission(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, main, extra = await _with_extra_mission(hass)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "mark_departed",
+        {"person_id": "kid_a", "plan_id": extra.plan_id},
+        blocking=True,
+    )
+
+    assert coordinator._store.get_mission(EXTRA_MISSION).status == "departed"
+    assert coordinator._store.get_mission(main.mission_id).status != "departed"
+
+
+async def test_get_alternatives_accepts_a_plan_id(hass: HomeAssistant) -> None:
+    _coordinator, _main, extra = await _with_extra_mission(hass)
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        "get_alternatives",
+        {"person_id": "kid_a", "plan_id": extra.plan_id},
+        blocking=True,
+        return_response=True,
+    )
+    assert response["alternatives"][0]["journey_id"] == "trip-1"
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            "get_alternatives",
+            {"person_id": "kid_a", "plan_id": "nope"},
+            blocking=True,
+            return_response=True,
+        )
+
+
+async def test_reopen_today_takes_a_slot(hass: HomeAssistant) -> None:
+    coordinator, main, _extra = await _with_extra_mission(hass)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "reopen_today",
+        {"person_id": "kid_a", "slot": EXTRA_SLOT},
+        blocking=True,
+    )
+
+    assert coordinator._store.get_mission(EXTRA_MISSION).reopened is True
+    assert coordinator._store.get_mission(main.mission_id).reopened is False

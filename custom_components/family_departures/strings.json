@@ -23,6 +23,8 @@
           "add_profile": "Add a profile",
           "edit_profile": "Edit a profile",
           "remove_profile": "Remove a profile",
+          "locations": "Locations",
+          "calendars": "Calendars",
           "settings": "Notification settings"
         }
       },
@@ -33,6 +35,74 @@
           "dry_run": "Dry run (log only, do not call scripts)",
           "test_recipient_script": "Test recipient script"
         }
+      },
+      "locations": {
+        "title": "Locations",
+        "menu_options": {
+          "location_add": "Add a location",
+          "location_edit": "Edit a location",
+          "location_remove": "Remove a location"
+        }
+      },
+      "location_edit": {
+        "title": "Choose location",
+        "data": {
+          "location_id": "Location"
+        }
+      },
+      "location_form": {
+        "title": "Location",
+        "description": "A named place profiles and calendar links can go to.",
+        "data": {
+          "name": "Name",
+          "location": "Position",
+          "aliases": "Aliases (comma separated)",
+          "static_minutes": "Static travel minutes (optional)"
+        },
+        "data_description": {
+          "aliases": "Other names an event can use, for example in a 'plats:' tag or a calendar LOCATION."
+        }
+      },
+      "location_remove": {
+        "title": "Remove location",
+        "data": {
+          "location_id": "Location"
+        }
+      },
+      "calendars": {
+        "title": "Calendars",
+        "menu_options": {
+          "calendar_add": "Add a calendar",
+          "calendar_edit": "Edit a calendar",
+          "calendar_remove": "Remove a calendar"
+        }
+      },
+      "calendar_edit": {
+        "title": "Choose calendar",
+        "data": {
+          "calendar_id": "Calendar"
+        }
+      },
+      "calendar_form": {
+        "title": "Calendar",
+        "description": "The ICS link holds a personal token and is stored securely. Leave it blank to keep the saved link. Persons selected below get this calendar as an extra link.",
+        "data": {
+          "name": "Name",
+          "source_type": "Source type",
+          "ics_url": "ICS link",
+          "calendar_entity_id": "Calendar entity",
+          "persons": "Linked persons"
+        }
+      },
+      "calendar_remove": {
+        "title": "Remove calendar",
+        "data": {
+          "calendar_id": "Calendar"
+        }
+      },
+      "calendar_remove_confirm": {
+        "title": "Remove calendar",
+        "description": "Removing this calendar removes it from every profile that uses it and deletes its stored link. This cannot be undone."
       },
       "edit_profile": {
         "title": "Choose profile",
@@ -48,30 +118,61 @@
       },
       "remove_confirm": {
         "title": "Remove profile",
-        "description": "Removing this profile deletes its settings, its stored schedule link and all its entities. This cannot be undone."
-      },
-      "profile_source": {
-        "title": "Schedule source",
-        "description": "The ICS link holds a personal token and is stored securely. Leave it blank to keep the saved link.",
+        "description": "Removing this profile deletes its settings and all its entities, and stops other profiles copying notices to it. Only this profile used: {unused}. Tick the box to remove those calendars (with their stored links) and locations too. This cannot be undone.",
         "data": {
-          "name": "Display name",
-          "source_type": "Source type",
-          "ics_url": "ICS link",
-          "calendar_entity_id": "Calendar entity",
-          "exclude_patterns": "Exclude patterns (comma separated)",
-          "include_patterns": "Include patterns (comma separated)"
+          "remove_unused": "Remove the calendars and locations only this profile used"
+        }
+      },
+      "profile_person": {
+        "title": "Person",
+        "description": "The Home Assistant person this profile belongs to. It is used to match names in shared calendars.",
+        "data": {
+          "person_entity_id": "Person",
+          "name": "Display name (blank: the person's name)",
+          "is_adult": "Adult (sets arrival margin default to 0)"
         }
       },
       "profile_destination": {
         "title": "Destination and travel mode",
-        "description": "Public-transport margins stay available even when the default mode is car.",
+        "description": "Choose a saved location, or type a name and pick a position to create a new one. Public-transport margins stay available even when the default mode is car.",
         "data": {
-          "destination_location": "Destination",
+          "default_location": "Default location",
+          "new_location_name": "New location name",
+          "destination_location": "Position of the new location",
           "default_mode": "Default travel mode",
           "static_minutes": "Static travel minutes (bike/walk, door to door)",
           "static_label": "Static mode label",
           "weather_adjust": "Add a weather surcharge to the static time",
           "car_fallback_minutes": "Car fallback minutes"
+        }
+      },
+      "profile_calendars": {
+        "title": "Calendars",
+        "description": "Link the calendars this profile follows and choose the main one (the school: the first event of the day sets the departure). Every other linked calendar becomes an activity calendar: each event is its own trip. Zero calendars is fine for a profile that only receives copies. A new calendar can be created below.",
+        "data": {
+          "calendars": "Linked calendars",
+          "main_calendar": "Main calendar",
+          "new_calendar_name": "New calendar name",
+          "new_calendar_source_type": "New calendar source type",
+          "new_calendar_ics_url": "New calendar ICS link",
+          "new_calendar_entity_id": "New calendar entity"
+        }
+      },
+      "profile_link": {
+        "title": "Calendar link",
+        "description": "Settings for the link to {calendar} ({role}). Rules map a summary to a place or mode, one per line: IDRO => Sporthallen, or Simning => Badhuset, kollektivt.",
+        "data": {
+          "label": "Label",
+          "include_patterns": "Include patterns (comma separated)",
+          "exclude_patterns": "Exclude patterns (comma separated)",
+          "attendee_mode": "Which events apply to this person",
+          "location": "Default location for this link",
+          "mode": "Default travel mode for this link",
+          "static_minutes": "Static minutes for this link",
+          "arrival_margin": "Arrival margin for this link (min)",
+          "rules": "Rules (match => place, mode)",
+          "match_event_location": "Match the event's LOCATION against location aliases",
+          "show_summary": "Show the event title in notices"
         }
       },
       "profile_margins": {
@@ -96,14 +197,17 @@
       },
       "profile_notifications": {
         "title": "Notifications and channels",
-        "description": "Channel scripts are optional so profiles without a phone can still be configured.",
+        "description": "Channel scripts are optional so profiles without a phone can still be configured. Copies send this person's notice text to the selected profiles' phones. Copies are sent only while this profile's own notifications are enabled, even if it has no scripts.",
         "data": {
           "quiet_start": "Quiet hours start",
           "quiet_end": "Quiet hours end",
           "notifications_enabled": "Notifications enabled",
           "evening_notice_enabled": "Evening summary enabled",
           "change_threshold_minutes": "Change threshold (min)",
-          "person_entity_id": "Person entity (presence)",
+          "copy_to": "Send copies to",
+          "copy_kinds": "Notice types to copy",
+          "lunch_calendar_entity_id": "Lunch calendar entity",
+          "lunch_in_digest": "Include lunch in the evening summary",
           "script_push": "Push script",
           "script_tts": "TTS script",
           "script_family_chat": "Family chat script"
@@ -118,10 +222,19 @@
       "ics_required": "An ICS link is required for this source type.",
       "calendar_required": "A calendar entity is required for this source type.",
       "cannot_connect": "The ICS link could not be fetched.",
-      "invalid_calendar": "The response was not a valid calendar."
+      "invalid_calendar": "The response was not a valid calendar.",
+      "location_in_use": "This location is used by a profile or a calendar link.",
+      "location_required": "Choose a saved location or name a new one.",
+      "person_in_use": "This person already belongs to another profile.",
+      "name_required": "Enter a display name.",
+      "rules_invalid": "Each rule must read 'text => place or mode', using a known location or mode.",
+      "duplicate_link": "That calendar is already linked to this profile.",
+      "main_not_linked": "The main calendar must be one of the linked calendars."
     },
     "abort": {
-      "no_profiles": "No profiles configured yet."
+      "no_profiles": "No profiles configured yet.",
+      "no_locations": "No locations configured yet.",
+      "no_calendars": "No calendars configured yet."
     },
     "selector": {
       "source_type": {
@@ -135,6 +248,34 @@
           "public_transport": "Public transport",
           "car": "Car",
           "static": "Bike/walk (static time)"
+        }
+      },
+      "mode_or_default": {
+        "options": {
+          "profile-default": "Profile default",
+          "public_transport": "Public transport",
+          "car": "Car",
+          "static": "Bike/walk (static time)"
+        }
+      },
+      "attendee_mode": {
+        "options": {
+          "all": "Every event",
+          "tagged": "Only events naming this person",
+          "tagged_or_untagged": "Untagged events and those naming this person"
+        }
+      },
+      "copy_kind": {
+        "options": {
+          "evening": "Evening summary",
+          "packing": "Packing reminder",
+          "morning": "Morning notice",
+          "reminder": "Reminder",
+          "leave_now": "Leave now",
+          "change": "Change",
+          "critical": "Critical change",
+          "cleanup": "Cleanup",
+          "removed": "Event removed"
         }
       }
     }
@@ -210,7 +351,8 @@
       "name": "Get alternatives",
       "description": "Return the reachable journeys for the current plan.",
       "fields": {
-        "person_id": { "name": "Person", "description": "Profile id." }
+        "person_id": { "name": "Person", "description": "Profile id." },
+        "plan_id": { "name": "Plan id", "description": "Optional plan id of one of today's missions; defaults to the active mission." }
       }
     },
     "select_journey": {
@@ -232,7 +374,8 @@
       "name": "Reopen today",
       "description": "Reopen today's mission after it was closed by a departure.",
       "fields": {
-        "person_id": { "name": "Person", "description": "Profile id." }
+        "person_id": { "name": "Person", "description": "Profile id." },
+        "slot": { "name": "Slot", "description": "Mission slot to reopen; defaults to morning (the main mission)." }
       }
     }
   },
@@ -271,7 +414,10 @@
       "route_summary": { "name": "Route summary" },
       "packing_list": { "name": "Packing list" },
       "packing_list_tomorrow": { "name": "Packing list tomorrow" },
-      "default_transport": { "name": "Default transport" }
+      "default_transport": { "name": "Default transport" },
+      "missions_today": { "name": "Missions today" },
+      "missions_tomorrow": { "name": "Missions tomorrow" },
+      "lunch_tomorrow": { "name": "Lunch tomorrow" }
     },
     "binary_sensor": {
       "departure_disruption": { "name": "Departure disruption" },
@@ -308,16 +454,20 @@
   },
   "issues": {
     "invalid_source": {
-      "title": "Schedule source for {profile} is not usable",
-      "description": "The schedule source for {profile} could not be set up ({reason}). Open the integration options and set a valid ICS feed or calendar entity for this profile."
+      "title": "Calendar {calendar} is not usable",
+      "description": "The calendar {calendar} ({linked_profiles} linked profile(s)) could not be set up ({reason}). Open the integration options and set a valid ICS feed or calendar entity for this calendar."
     },
     "missing_destination": {
       "title": "Destination missing for {profile}",
       "description": "{profile} has no destination coordinates, so no travel time can be computed. Open the integration options and set the destination location for this profile."
     },
     "repeated_fetch_failure": {
-      "title": "Schedule source for {profile} keeps failing",
-      "description": "The schedule for {profile} failed to load {failures} times in a row (last error: {error_code}). Check that the feed is reachable; the last cached schedule is used until it recovers."
+      "title": "Calendar {calendar} keeps failing",
+      "description": "The calendar {calendar} ({linked_profiles} linked profile(s)) failed to load {failures} times in a row (last error: {error_code}). Check that the feed is reachable; the last cached schedule is used until it recovers."
+    },
+    "profile_without_person": {
+      "title": "Profile {profile} has no linked person",
+      "description": "{profile} is not linked to a Home Assistant person entity, so it cannot be matched against attendee tags in shared calendars. Open the integration options and link a person to this profile."
     }
   }
 }

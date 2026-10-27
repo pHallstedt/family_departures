@@ -52,6 +52,38 @@ listed; the end-to-end tests live in `tests/test_e2e_morning.py` (T21).
 | En kanalleverans misslyckas – dashboard och övriga kanaler fortsätter | `test_dispatcher.py::test_one_channel_failing_does_not_stop_the_others`, `::test_event_fired_with_intent_content` | |
 | Unload/reload – inga kvarvarande timers eller dubbla listeners | `test_init.py::test_reload_leaves_no_duplicate_listeners`; `test_entities.py::test_entities_unload_cleanly`; `test_scheduler.py::test_shutdown_leaves_no_timers`, `::test_dropped_mission_cancels_its_timers`; `test_e2e_morning.py::test_full_morning_transit_lifecycle` (final tick); `test_notification_wiring.py::test_unload_and_reload_do_not_duplicate_or_leak_notifications` | Reload flushes the ledger, no resend |
 
+## Multi-calendar, activities, copies and lunch (post-v1 plan)
+
+These features come from `.agents/tasks/plan-multi-calendar-skolmaten`, not the
+spec's §16 table, so they are listed by scenario. All use controlled time and
+sanitised fixtures with placeholder places, names and slugs.
+
+| Scenario | Test(s) |
+| --- | --- |
+| School only behaves exactly as before the multi-calendar work | `test_missions.py::test_a_school_only_is_identical_to_select_requirement` |
+| School plus two activities give three missions, each notified once | `test_missions.py::test_b_school_plus_two_extra_events_gives_three_missions`; `test_e2e_activities.py::test_school_and_two_activities_each_notify_once` |
+| The active mission moves to the next event after departure | `test_e2e_activities.py::test_active_mission_moves_to_football_after_school_departed` |
+| Saturday with only an activity still notifies, school stays silent | `test_missions.py::test_c_saturday_extra_only_has_event_and_main_is_silent`; `test_e2e_activities.py::test_saturday_activity_notifies_from_home` |
+| Too little time at home, overlapping missions, back-to-back | `test_missions.py::test_d_home_gap_too_short_when_leave_precedes_last_lesson_end`, `::test_e_two_simultaneous_extra_events_flag_each_other`, `::test_e_partial_overlap_is_flagged_but_back_to_back_is_not` |
+| One failing activity calendar leaves school untouched; a failing main keeps the error | `test_missions.py::test_f_extra_error_leaves_main_unaffected`, `::test_g_main_error_still_plans_extras_and_keeps_the_error` |
+| Off, sick and remote close the right missions | `test_missions.py::test_h_off_and_sick_close_every_mission`, `::test_h_remote_closes_main_only` |
+| Destination and mode precedence (tag, rule, link, profile) and bad values falling back | `test_missions.py::test_i_destination_precedence_chain`, `::test_i_mode_precedence_chain`, `::test_j_unknown_location_tag_falls_back_with_reason`, `::test_j_unknown_transport_tag_falls_back_with_reason` |
+| Locked school departure unaffected by an activity change | `test_missions.py::test_k_locked_main_is_unaffected_by_an_extra_event_change` |
+| Moved event keeps its mission, removed event disappears | `test_missions.py::test_l_moved_event_keeps_id_and_removed_event_disappears`; `test_provider_ics.py` occurrence-key tests |
+| Entry tags (`plats`, `färdsätt`, `vem`), bracket form, no raw description kept | `test_event_tags.py` (all) |
+| Shared calendar: who sees which event | `test_calendar_links.py::test_tagged_or_untagged_untagged_reaches_everyone`, `::test_tagged_or_untagged_tagged_reaches_only_named_person`, `::test_tagged_requires_a_match` |
+| Rules text parses, round-trips and rejects bad lines | `test_calendar_links.py::test_rules_text_*`, `::test_format_rules_text_round_trips` |
+| Removed event: one "removed" notice, silent without a prior leave notice | `test_e2e_activities.py::test_removed_event_after_morning_notice_sends_removed_once`; `test_scheduler.py::test_removed_extra_event_sends_removed_and_cleanup_once`, `::test_removed_extra_event_is_silent_without_a_prior_leave_notice` |
+| Skip one mission only | `test_e2e_activities.py::test_skip_action_skips_only_that_mission` |
+| Day-before digest: one notice, 20:00, held in quiet hours, no resend after upgrade or restart | `test_e2e_activities.py::test_evening_before_sends_one_digest_listing_every_mission`; `test_scheduler.py::test_digest_fires_once_at_twenty_and_is_ledgered`, `::test_digest_is_not_resent_when_legacy_morning_ledger_has_evening`, `::test_digest_is_held_inside_quiet_hours`, `::test_no_digest_when_tomorrow_has_no_mission`, `::test_restart_after_twenty_catches_up_the_digest_exactly_once`; `test_notification_policy.py::test_digest_*` |
+| Copies: recipient, kinds, quiet hours, no loops, `cleanup` always follows | `test_notification_copies.py` (all); `test_dispatcher.py` copy tests |
+| Lunch from a calendar: all-day event, weekend empty, unavailable entity is an error | `test_provider_lunch_calendar.py` |
+| Lunch cache: one call for two profiles, 3 h / 30 min TTL, crashing provider | `test_coordinator.py::test_two_profiles_on_one_lunch_entity_make_one_call`, `::test_a_good_menu_is_refetched_after_three_hours_an_error_after_thirty_minutes`, `::test_a_crashing_lunch_provider_gives_an_error_menu_not_a_failed_profile` |
+| Lunch in the digest only for a school day; a failed source never holds it back | `test_notification_policy.py::test_digest_includes_lunch_when_known`, `::test_digest_leaves_lunch_out_when_off_or_without_a_school_day` |
+| Lunch sensor and diagnostics redaction | `test_entities.py::test_lunch_sensor_*`; `test_diagnostics.py::test_diagnostics_contain_no_dish_text` |
+| v1 entry migrates, ICS URL moves to the secret store, ledger kept | `test_migration.py` (all) |
+| Options flow: locations, calendars, profiles, shared-calendar protection, removal | `test_config_flow.py`; `test_options_translations.py` |
+
 ## Setup wiring
 
 `tests/test_notification_wiring.py` sets up a real config entry and proves the

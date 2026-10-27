@@ -55,6 +55,12 @@ async def parent_b_calendar(hass: HomeAssistant) -> str:
     return await _setup_calendar(hass, "Parent B", ics)
 
 
+@pytest.fixture
+async def activities_calendar(hass: HomeAssistant) -> str:
+    ics = (FIXTURES / "local_calendar_activities.ics").read_text()
+    return await _setup_calendar(hass, "Activities", ics)
+
+
 def _provider(hass: HomeAssistant, entity_id: str) -> HaCalendarScheduleProvider:
     return HaCalendarScheduleProvider(hass, entity_id, SourceFilter(), SOURCE_ID)
 
@@ -151,3 +157,57 @@ async def test_fetched_at_defaults_to_now(
     provider = _provider(hass, parent_b_calendar)
     result = await provider.async_get_day(date(2026, 10, 20))
     assert result.fetched_at.tzinfo is not None
+
+
+# --------------------------------------------------------------------------
+# Enrichment: location, tags and same-summary occurrence keys (plan §4.4, §5)
+# --------------------------------------------------------------------------
+
+
+async def test_tags_and_location_read_from_events(
+    hass: HomeAssistant, activities_calendar: str
+) -> None:
+    """LOCATION and DESCRIPTION/bracket tags are parsed from get_events items."""
+    provider = _provider(hass, activities_calendar)
+    result = await provider.async_get_day(date(2026, 10, 19), now=NOW)
+
+    assert result.status == "ok"
+    by_summary = {}
+    for event in result.events:
+        by_summary.setdefault(event.summary, []).append(event)
+
+    football = by_summary["Fotboll"][0]
+    assert football.location == "Sporthall A"
+    assert football.tags.location == "Fotbollsplanen"
+    assert football.tags.transport == "cykel"
+
+    swimming = by_summary["Simning [plats: Badhuset]"][0]
+    assert swimming.tags.location == "Badhuset"
+
+
+async def test_same_summary_events_get_suffixed_keys(
+    hass: HomeAssistant, activities_calendar: str
+) -> None:
+    """Two same-summary events in start order get keys differing by -2."""
+    provider = _provider(hass, activities_calendar)
+    result = await provider.async_get_day(date(2026, 10, 19), now=NOW)
+
+    footballs = [e for e in result.events if e.summary == "Fotboll"]
+    assert len(footballs) == 2
+    # Start order (17:30 then 19:30).
+    footballs.sort(key=lambda e: e.start)
+    first_key = footballs[0].occurrence_key
+    second_key = footballs[1].occurrence_key
+    assert first_key is not None and second_key is not None
+    # First keeps the bare hash; second is suffixed -2.
+    assert second_key == f"{first_key}-2"
+
+
+async def test_raw_description_absent_from_schedule_event(
+    hass: HomeAssistant, activities_calendar: str
+) -> None:
+    """The raw DESCRIPTION never reaches ScheduleEvent (plan §5.3, §10)."""
+    provider = _provider(hass, activities_calendar)
+    result = await provider.async_get_day(date(2026, 10, 19), now=NOW)
+    assert result.events
+    assert not hasattr(result.events[0], "description")

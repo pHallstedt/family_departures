@@ -39,12 +39,13 @@ from custom_components.family_departures.coordinator import ProviderFactories
 from custom_components.family_departures.diagnostics import (
     async_get_config_entry_diagnostics,
 )
+from custom_components.family_departures.household import migrate_v1_to_v2
 from custom_components.family_departures.models import (
+    CalendarSource,
     DurationResult,
     Journey,
     JourneyResult,
     Leg,
-    ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
 )
@@ -220,18 +221,38 @@ def _make_entry(
 ) -> MockConfigEntry:
     if ics_urls is None:
         ics_urls = {pid: SECRET_ICS_URL for pid in profiles}
+    data = {
+        DATA_HOUSEHOLD_NAME: "Familjen",
+        DATA_HOME_LAT: HOME[0],
+        DATA_HOME_LON: HOME[1],
+        DATA_ICS_URLS: dict(ics_urls),
+    }
+    new_data, new_options = migrate_v1_to_v2(data, {OPT_PROFILES: dict(profiles)})
     return MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
         title="Familjen",
-        data={
-            DATA_HOUSEHOLD_NAME: "Familjen",
-            DATA_HOME_LAT: HOME[0],
-            DATA_HOME_LON: HOME[1],
-            DATA_ICS_URLS: dict(ics_urls),
-        },
-        options={OPT_PROFILES: dict(profiles)},
+        version=2,
+        data=new_data,
+        options=new_options,
     )
+
+
+class _FakeLunch:
+    """A lunch provider that returns a fixed menu for any date."""
+
+    def __init__(self, dishes: tuple[str, ...]) -> None:
+        self._dishes = dishes
+
+    async def async_get_lunch(self, d):
+        from custom_components.family_departures.models import LunchMenu
+
+        return LunchMenu(
+            local_date=d,
+            status="ok" if self._dishes else "empty",
+            dishes=self._dishes,
+            fetched_at=NOW,
+        )
 
 
 def _patch_factories(
@@ -239,24 +260,26 @@ def _patch_factories(
     *,
     journey: _FakeJourney | None = None,
     car: _FakeCar | None = None,
+    lunch: _FakeLunch | None = None,
 ):
     journey = journey or _FakeJourney(_transit_result())
     car = car or _FakeCar(
         DurationResult(minutes=20.0, fetched_at=NOW, source="waze", quality="realtime")
     )
 
-    def make_schedule(profile: ProfileConfig, ics_url: str | None) -> _FakeSchedule:
-        # Mirror the production factory: an ICS profile with no URL is not
+    def make_schedule(calendar: CalendarSource, ics_url: str | None) -> _FakeSchedule:
+        # Mirror the production factory: an ICS calendar with no URL is not
         # buildable, which the coordinator turns into an invalid-source issue.
-        if profile.source_type == "ics" and not ics_url:
-            raise ValueError(f"profile {profile.id} has no ICS URL configured")
-        return schedules[profile.id]
+        if calendar.source_type == "ics" and not ics_url:
+            raise ValueError(f"calendar {calendar.id} has no ICS URL configured")
+        return schedules[calendar.id.removesuffix("_calendar")]
 
     def _factory(hass: HomeAssistant) -> ProviderFactories:
         return ProviderFactories(
             schedule=make_schedule,
             journey=lambda: journey,
             car=lambda: car,
+            lunch=(lambda entity_id: lunch) if lunch else None,
         )
 
     return patch.object(coordinator_mod, "_default_factories", _factory)
@@ -300,8 +323,8 @@ async def test_diagnostics_redacts_url_token_coords_and_summary(
     assert CHILD_SUMMARY not in blob
 
     # But the operational figures the spec wants ARE present.
-    assert diag["source_health"]["kid_a_destination"]["external_calls"] >= 1
-    assert diag["source_health"]["kid_a_destination"]["last_success"] is not None
+    assert diag["source_health"]["kid_a_calendar"]["external_calls"] >= 1
+    assert diag["source_health"]["kid_a_calendar"]["last_success"] is not None
     profile_diag = diag["profiles"][0]
     assert profile_diag["id"] == "kid_a"
     assert profile_diag["schedule_status"] == "ok"
@@ -320,7 +343,7 @@ async def test_diagnostics_reports_source_error_code_without_content(
         await _setup(hass, entry)
         diag = await async_get_config_entry_diagnostics(hass, entry)
 
-    health = diag["source_health"]["kid_a_destination"]
+    health = diag["source_health"]["kid_a_calendar"]
     assert health["last_error_code"] == "http_error"
     assert health["consecutive_failures"] == 1
     assert health["last_success"] is None
@@ -342,7 +365,9 @@ async def test_repeated_fetch_failures_raise_and_clear_issue(
     schedule = _FakeSchedule(_ok_schedule(), *errors, _ok_schedule())
 
     reg = ir.async_get(hass)
-    issue_id = f"{ISSUE_REPEATED_FETCH_FAILURE}_kid_a"
+    # Source-health issues are keyed per calendar; the migration keys kid_a's
+    # calendar as ``kid_a_calendar`` (plan §4.1).
+    issue_id = f"{ISSUE_REPEATED_FETCH_FAILURE}_kid_a_calendar"
 
     with _patch_factories({"kid_a": schedule}):
         await _setup(hass, entry)
@@ -376,9 +401,13 @@ async def test_invalid_source_issue_for_profile_without_url(
     with _patch_factories(schedules):
         await _setup(hass, entry)
 
-    # Kid A is fine; Kid B is flagged. One broken source does not hide the other.
-    assert reg.async_get_issue(DOMAIN, f"{ISSUE_INVALID_SOURCE}_kid_a") is None
-    assert reg.async_get_issue(DOMAIN, f"{ISSUE_INVALID_SOURCE}_kid_b") is not None
+    # Kid A is fine; Kid B's calendar is flagged. The invalid-source issue is
+    # keyed per calendar now, and one broken calendar does not hide the other.
+    assert reg.async_get_issue(DOMAIN, f"{ISSUE_INVALID_SOURCE}_kid_a_calendar") is None
+    assert (
+        reg.async_get_issue(DOMAIN, f"{ISSUE_INVALID_SOURCE}_kid_b_calendar")
+        is not None
+    )
 
 
 async def test_missing_destination_issue_raised_and_cleared(
@@ -396,9 +425,11 @@ async def test_missing_destination_issue_raised_and_cleared(
         await _setup(hass, entry)
         assert reg.async_get_issue(DOMAIN, issue_id) is not None
 
-        # Give the profile a destination and reload: the issue clears.
+        # Give the profile a destination and reload: the issue clears. The
+        # update stores the v2 (migrated) options shape.
         fixed = {"kid_a": _profile_dict("kid_a", dest=DEST)}
-        hass.config_entries.async_update_entry(entry, options={OPT_PROFILES: fixed})
+        _data, fixed_options = migrate_v1_to_v2(dict(entry.data), {OPT_PROFILES: fixed})
+        hass.config_entries.async_update_entry(entry, options=fixed_options)
         await hass.async_block_till_done()
         assert reg.async_get_issue(DOMAIN, issue_id) is None
 
@@ -422,3 +453,19 @@ async def test_static_profile_without_destination_not_flagged(
         await _setup(hass, entry)
 
     assert reg.async_get_issue(DOMAIN, f"{ISSUE_MISSING_DESTINATION}_parent_a") is None
+
+
+async def test_diagnostics_contain_no_dish_text(hass: HomeAssistant) -> None:
+    """A menu is not operational data, so no dish or lunch entity id leaks."""
+    profile = _profile_dict("kid_a")
+    profile["lunch_calendar_entity_id"] = "calendar.skolmat"
+    entry = _make_entry({"kid_a": profile})
+    schedules = {"kid_a": _FakeSchedule(_ok_schedule())}
+
+    with _patch_factories(schedules, lunch=_FakeLunch(("Köttbullar",))):
+        await _setup(hass, entry)
+        diag = await async_get_config_entry_diagnostics(hass, entry)
+
+    blob = json.dumps(diag)
+    assert "Köttbullar" not in blob
+    assert "skolmat" not in blob

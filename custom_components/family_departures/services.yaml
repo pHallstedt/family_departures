@@ -77,6 +77,11 @@ get_alternatives:
       example: kid_a
       selector:
         text:
+    plan_id:
+      required: false
+      example: "kid_a:2026-10-01:x-club-3f9a1c0b2d"
+      selector:
+        text:
 
 select_journey:
   fields:
@@ -101,5 +106,11 @@ reopen_today:
     person_id:
       required: true
       example: kid_a
+      selector:
+        text:
+    slot:
+      required: false
+      default: morning
+      example: "x-club-3f9a1c0b2d"
       selector:
         text:

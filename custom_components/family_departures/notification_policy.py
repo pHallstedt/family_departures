@@ -10,12 +10,10 @@ notifications are suppressed via the ``(mission_id, kind)`` ledger in
 
 Decisions implemented (spec §12.1, §5.5):
 
-* Kinds, in the order they fire over a mission's life: ``evening`` (20:00, with
-  tomorrow's packing list), ``packing`` (20:00, only when the evening notice is
-  off for the profile), ``morning`` (−60 min), ``reminder`` (−10 min),
-  ``leave_now`` (recommended departure passed), ``change`` (≥ threshold vs the
-  last notified leave), ``critical`` (cancelled/infeasible trip) and
-  ``cleanup`` (departure confirmed → clear Live Update).
+* Kinds, in the order they fire over a mission's life: ``morning`` (−60 min),
+  ``reminder`` (−10 min), ``leave_now`` (recommended departure passed),
+  ``change`` (≥ threshold vs the last notified leave), ``critical``
+  (cancelled/infeasible trip) and ``cleanup`` (departure confirmed → clear Live Update).
 * Change alerts compare against the **last notified** leave time, or the
   ``first_published_leave`` baseline when nothing has been sent yet, so several
   small drifts that sum past the threshold are not lost. A worsening (later
@@ -31,7 +29,10 @@ Decisions implemented (spec §12.1, §5.5):
 * Deduplication is keyed on ``(mission_id, kind)``; the Android ``tag`` is
   stable per mission (``departure_<mission_id>``) so a replacement notification
   overwrites the previous one on the phone instead of stacking (§11.3).
-* Packing items ride on the ``evening``, ``morning`` and ``reminder`` notices,
+* The 20:00 ``evening`` (or ``packing``, when the evening notice is off) notice
+  is one digest per person and day, :func:`evaluate_day_digest`, listing every
+  mission of tomorrow plus the packing list (plan §6.2).
+* Packing items ride on the main mission's ``morning`` and ``reminder`` notices,
   taken from ``packing.items`` (already the still-pending items, §5.5).
 * No intents are produced once the mission is ``departed``/``skipped`` other
   than a one-off ``cleanup`` to clear the Live Update.
@@ -39,10 +40,12 @@ Decisions implemented (spec §12.1, §5.5):
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from collections.abc import Sequence
+from datetime import date, datetime, time, timedelta
 
 from .models import (
     DeparturePlan,
+    LunchMenu,
     MissionState,
     NotificationIntent,
     NotifiedRecord,
@@ -61,6 +64,13 @@ KIND_LEAVE_NOW = "leave_now"
 KIND_CHANGE = "change"
 KIND_CRITICAL = "critical"
 KIND_CLEANUP = "cleanup"
+KIND_REMOVED = "removed"
+
+# The main (school) mission; only it carries the packing list on its notices.
+MAIN_SLOT = "morning"
+# The day-before digest is a mission of its own (``person:d:day``): it holds the
+# ledger and the action nonce for the 20:00 evening/packing notice.
+DIGEST_SLOT = "day"
 
 # Severities carried to the channel scripts (§12.2).
 _SEVERITY = {
@@ -72,6 +82,7 @@ _SEVERITY = {
     KIND_CHANGE: "info",
     KIND_CRITICAL: "warning",
     KIND_CLEANUP: "info",
+    KIND_REMOVED: "info",
 }
 
 # Timing windows relative to the recommended departure (§12.1).
@@ -98,12 +109,27 @@ REASON_CANCELLED = "trip_cancelled"
 REASON_CANNOT_ARRIVE = "cannot_arrive_on_time"
 
 
+def _title(profile: ProfileConfig, plan: DeparturePlan, phrase: str) -> str:
+    """Notification title: the person, then the phrase.
+
+    An extra-link mission is titled by its activity and start time, so two
+    missions of one person are distinguishable on the phone: ``Kid – Fotboll
+    17:30`` (plan §6.1); the kind is told by the message. The main mission keeps
+    ``Kid – <phrase>``.
+    """
+    req = plan.requirement
+    if req.slot == MAIN_SLOT:
+        return f"{profile.name} – {phrase}"
+    subject = req.label or "aktivitet"
+    return f"{profile.name} – {subject} {_hhmm(req.event_start)}"
+
+
 def _tag(mission_id: str) -> str:
     """Stable Android notification tag per mission (§11.3, §12.3)."""
     return f"departure_{mission_id}"
 
 
-def _in_quiet_hours(now: datetime, quiet_start: time, quiet_end: time) -> bool:
+def in_quiet_hours(now: datetime, quiet_start: time, quiet_end: time) -> bool:
     """True if the local wall-clock ``now`` is inside the quiet window.
 
     Quiet hours normally wrap midnight (e.g. 21:00–06:00). An empty window
@@ -193,30 +219,29 @@ def _build_intent(
         channels=tuple(profile.scripts.keys()),
         tag=_tag(plan.mission_id),
         action_nonce=state.action_nonce,
+        slot=plan.requirement.slot,
     )
 
 
-def _evening_message(plan: DeparturePlan, items: tuple[str, ...]) -> str:
-    """Preliminary evening message; never claims live traffic (§12.1)."""
-    base = "Morgondagens plan är preliminär."
-    if plan.recommended_leave is not None:
-        local = plan.recommended_leave.astimezone(TZ).strftime("%H:%M")
-        base = f"Imorgon: rekommenderad avgång {local} (preliminärt)."
-    if items:
-        return "Imorgon: packa " + ", ".join(items) + f". {base}"
-    return base
+def _leave_message(plan: DeparturePlan, profile: ProfileConfig) -> str:
+    """Message body for morning/reminder/leave-now (§12.1).
 
-
-def _leave_message(plan: DeparturePlan) -> str:
-    """Message body for morning/reminder/leave-now (§12.1)."""
+    Appends ``→ <destination>`` when the mission goes somewhere other than the
+    profile's default location (plan §6.1).
+    """
     if plan.recommended_leave is None:
         return "Ingen säker avgångstid – kontrollera planen."
     rec = plan.recommended_leave.astimezone(TZ).strftime("%H:%M")
     quality = _quality_label(plan.quality)
     if plan.latest_leave is not None:
         latest = plan.latest_leave.astimezone(TZ).strftime("%H:%M")
-        return f"Rekommenderad avgång {rec}, senast {latest} ({quality})."
-    return f"Rekommenderad avgång {rec} ({quality})."
+        message = f"Rekommenderad avgång {rec}, senast {latest} ({quality})."
+    else:
+        message = f"Rekommenderad avgång {rec} ({quality})."
+    req = plan.requirement
+    if req.destination_name and req.destination_id != profile.default_location_id:
+        message += f" → {req.destination_name}"
+    return message
 
 
 def _is_closed(state: MissionState, plan: DeparturePlan) -> bool:
@@ -270,7 +295,7 @@ def evaluate(
                     profile=profile,
                     state=state,
                     kind=KIND_CLEANUP,
-                    title=f"{profile.name} – klar",
+                    title=_title(profile, current, "klar"),
                     message="Avresa bekräftad. Rensar påminnelser.",
                 )
             )
@@ -280,7 +305,7 @@ def evaluate(
     local_date = current.requirement.local_date
     today = now.astimezone(TZ).date()
     is_today = local_date == today
-    quiet = _in_quiet_hours(now, profile.quiet_start, profile.quiet_end)
+    quiet = in_quiet_hours(now, profile.quiet_start, profile.quiet_end)
     packing_items = _packing_items(packing)
 
     # --- Critical travel change (bypasses cooldown, passes quiet for today). -
@@ -295,49 +320,13 @@ def evaluate(
                     profile=profile,
                     state=state,
                     kind=KIND_CRITICAL,
-                    title=f"{profile.name} – reseändring",
+                    title=_title(profile, current, "reseändring"),
                     message="Vald resa fungerar inte – se nästa nåbara alternativ.",
                     reason_codes=critical_reasons,
                 )
             )
 
-    # --- Evening / packing-only notice (20:00 of the day before the trip). ---
-    # Held inside quiet hours (next-day notice).
-    local_now = now.astimezone(TZ)
-    if (
-        not is_today
-        and local_now.hour >= EVENING_HOUR
-        and not quiet
-        and rec is not None
-    ):
-        if profile.evening_notice_enabled:
-            # Full evening summary carries the packing list (§5.5, §12.1).
-            if not _already_sent(state, KIND_EVENING):
-                intents.append(
-                    _build_intent(
-                        plan=current,
-                        profile=profile,
-                        state=state,
-                        kind=KIND_EVENING,
-                        title=f"{profile.name} – imorgon",
-                        message=_evening_message(current, packing_items),
-                        packing_items=packing_items,
-                    )
-                )
-        elif packing_items and not _already_sent(state, KIND_PACKING):
-            # Evening summary off: send a packing-only notice at the same time,
-            # but only when there is actually something to pack (§5.5, §12.1).
-            intents.append(
-                _build_intent(
-                    plan=current,
-                    profile=profile,
-                    state=state,
-                    kind=KIND_PACKING,
-                    title=f"{profile.name} – packa inför imorgon",
-                    message="Imorgon: packa " + ", ".join(packing_items) + ".",
-                    packing_items=packing_items,
-                )
-            )
+    # (The evening / packing notices moved to :func:`evaluate_day_digest`.)
 
     # --- Timed morning / reminder / leave-now (relative to recommended). -----
     if rec is not None and is_today:
@@ -353,8 +342,8 @@ def evaluate(
                         profile=profile,
                         state=state,
                         kind=KIND_MORNING,
-                        title=f"{profile.name} – dagens avgång",
-                        message=_leave_message(current),
+                        title=_title(profile, current, "dagens avgång"),
+                        message=_leave_message(current, profile),
                         packing_items=packing_items,
                     )
                 )
@@ -367,8 +356,8 @@ def evaluate(
                     profile=profile,
                     state=state,
                     kind=KIND_REMINDER,
-                    title=f"{profile.name} – snart dags",
-                    message=_leave_message(current),
+                    title=_title(profile, current, "snart dags"),
+                    message=_leave_message(current, profile),
                     packing_items=packing_items,
                 )
             )
@@ -380,8 +369,8 @@ def evaluate(
                     profile=profile,
                     state=state,
                     kind=KIND_LEAVE_NOW,
-                    title=f"{profile.name} – dags att gå",
-                    message=_leave_message(current),
+                    title=_title(profile, current, "dags att gå"),
+                    message=_leave_message(current, profile),
                 )
             )
 
@@ -412,7 +401,7 @@ def _morning_passes_quiet(
     which case it is skipped for good (the −10 reminder and leave-now cover the
     person instead). Outside quiet hours it is always sent.
     """
-    if _in_quiet_hours(now, profile.quiet_start, profile.quiet_end):
+    if in_quiet_hours(now, profile.quiet_start, profile.quiet_end):
         # Still inside quiet hours: hold until quiet-end.
         return False
     # At or past quiet-end (or quiet hours never applied). If the natural
@@ -420,7 +409,7 @@ def _morning_passes_quiet(
     # is now under the floor, skip it entirely; the −10 reminder and leave-now
     # cover the person instead (§12.1).
     natural_morning = recommended - timedelta(minutes=MORNING_LEAD_MINUTES)
-    was_held = _in_quiet_hours(natural_morning, profile.quiet_start, profile.quiet_end)
+    was_held = in_quiet_hours(natural_morning, profile.quiet_start, profile.quiet_end)
     minutes_left = (recommended - now).total_seconds() / 60
     if was_held and minutes_left < MIN_MINUTES_AFTER_QUIET:
         return False
@@ -481,8 +470,8 @@ def _maybe_change_intent(
             profile=profile,
             state=state,
             kind=KIND_CHANGE,
-            title=f"{profile.name} – ändrad avgång",
-            message=_leave_message(current),
+            title=_title(profile, current, "ändrad avgång"),
+            message=_leave_message(current, profile),
             reason_codes=(REASON_WORSENING,),
         )
 
@@ -499,7 +488,189 @@ def _maybe_change_intent(
         profile=profile,
         state=state,
         kind=KIND_CHANGE,
-        title=f"{profile.name} – ändrad avgång",
-        message=_leave_message(current),
+        title=_title(profile, current, "ändrad avgång"),
+        message=_leave_message(current, profile),
         reason_codes=(REASON_IMPROVEMENT,),
     )
+
+
+def evaluate_removed(
+    plan: DeparturePlan,
+    state: MissionState,
+    profile: ProfileConfig,
+    now: datetime,
+) -> list[NotificationIntent]:
+    """Notices for an extra mission whose event vanished from the calendar (§4.4).
+
+    ``plan`` is the last published plan of the vanished mission. Silent unless
+    the user was already told a departure (a ``morning``, ``reminder`` or
+    ``change`` notice in the ledger), the event has not started yet and no
+    ``removed`` notice went out. Then it yields one ``removed`` notice plus a
+    ``cleanup`` that clears the tagged notification. The cleanup comes first:
+    both share the mission's tag, so clearing afterwards would wipe the
+    ``removed`` notice from the phone the moment it appeared.
+    """
+    if not profile.notifications_enabled:
+        return []
+    if plan.requirement.slot == MAIN_SLOT:
+        return []
+    if _already_sent(state, KIND_REMOVED) or _is_closed(state, plan):
+        return []
+    if now >= plan.requirement.event_start:
+        return []
+    if not any(
+        kind in state.notified for kind in (KIND_MORNING, KIND_REMINDER, KIND_CHANGE)
+    ):
+        return []
+
+    req = plan.requirement
+    subject = req.label or "aktivitet"
+    when = req.event_start.astimezone(TZ).strftime("%H:%M")
+    intents: list[NotificationIntent] = []
+    if not _already_sent(state, KIND_CLEANUP):
+        intents.append(
+            _build_intent(
+                plan=plan,
+                profile=profile,
+                state=state,
+                kind=KIND_CLEANUP,
+                title=_title(profile, plan, "klar"),
+                message="Händelsen är borttagen. Rensar påminnelser.",
+            )
+        )
+    intents.append(
+        _build_intent(
+            plan=plan,
+            profile=profile,
+            state=state,
+            kind=KIND_REMOVED,
+            title=_title(profile, plan, "borttagen"),
+            message=f"{subject} {when} är borttagen ur kalendern.",
+        )
+    )
+    return intents
+
+
+# --- Day-before digest (plan §6.2) -------------------------------------------
+
+_WARNING_TEXT = {
+    "home_gap_too_short": "⚠ kort tid hemma",
+    "overlaps_other_commitment": "⚠ krockar med annat",
+}
+
+
+def _hhmm(value: datetime) -> str:
+    return value.astimezone(TZ).strftime("%H:%M")
+
+
+def _digest_line(plan: DeparturePlan) -> str:
+    """One mission as a digest line: ``17:30 Fotboll → Planen – gå 16:55 ⚠ …``."""
+    req = plan.requirement
+    label = req.label or ("Skola" if req.slot == MAIN_SLOT else "Aktivitet")
+    if req.slot != MAIN_SLOT and req.destination_name:
+        label = f"{label} → {req.destination_name}"
+    if plan.recommended_leave is not None:
+        line = f"{_hhmm(req.event_start)} {label} – gå {_hhmm(plan.recommended_leave)}"
+    else:
+        line = f"{_hhmm(req.event_start)} {label} – ingen säker avgångstid"
+    marks = [_WARNING_TEXT[w] for w in req.warnings if w in _WARNING_TEXT]
+    return " ".join([line, *marks])
+
+
+def _lunch_text(
+    lunch: LunchMenu | None, profile: ProfileConfig, plans: Sequence[DeparturePlan]
+) -> str | None:
+    """The digest's lunch line, only for a school day (a main mission) with a menu."""
+    if lunch is None or lunch.status != "ok" or not lunch.dishes:
+        return None
+    if not profile.lunch_in_digest:
+        return None
+    if not any(plan.requirement.slot == MAIN_SLOT for plan in plans):
+        return None
+    return "Lunch imorgon: " + ", ".join(lunch.dishes)
+
+
+def evaluate_day_digest(
+    profile: ProfileConfig,
+    d: date,
+    plans: Sequence[DeparturePlan],
+    packing: PackingList,
+    lunch: LunchMenu | None,
+    state: MissionState,
+    legacy_state: MissionState | None,
+    now: datetime,
+) -> list[NotificationIntent]:
+    """The 20:00 day-before digest for ``d`` (plan §6.2); empty when not due.
+
+    One ``evening`` notice (or ``packing`` when the evening notice is off and
+    there is something to pack) listing every mission of ``d`` in start order,
+    then the packing list and the lunch. Held inside quiet hours, never sent on
+    or after ``d`` itself, and never when ``d`` has no mission. ``state`` is the
+    ``person:d:day`` mission (ledger and action nonce); a ``legacy_state`` (the
+    old ``person:d:morning``) that already carries an ``evening``/``packing``
+    record counts as sent, so an upgrade between 20:00 and midnight does not
+    send a second digest.
+    """
+    if not profile.notifications_enabled or not plans:
+        return []
+    local_now = now.astimezone(TZ)
+    if local_now.date() >= d or local_now.hour < EVENING_HOUR:
+        return []
+    if in_quiet_hours(now, profile.quiet_start, profile.quiet_end):
+        return []
+    digest_kinds = (KIND_EVENING, KIND_PACKING)
+    if any(kind in state.notified for kind in digest_kinds):
+        return []
+    if legacy_state is not None and any(
+        kind in legacy_state.notified for kind in digest_kinds
+    ):
+        return []
+
+    items = packing.items
+    if profile.evening_notice_enabled:
+        kind = KIND_EVENING
+        title = f"{profile.name} – imorgon"
+    elif items:
+        kind = KIND_PACKING
+        title = f"{profile.name} – packa inför imorgon"
+    else:
+        return []
+
+    ordered = sorted(plans, key=lambda p: p.requirement.event_start)
+    lunch_text = _lunch_text(lunch, profile, ordered)
+    if kind == KIND_EVENING:
+        parts = [_digest_line(plan) for plan in ordered]
+        if items:
+            parts.append("Packa: " + ", ".join(items))
+        if lunch_text is not None:
+            parts.append(lunch_text)
+        message = "\n".join(parts)
+    else:
+        message = "Imorgon: packa " + ", ".join(items) + "."
+
+    with_leave = [p for p in ordered if p.recommended_leave is not None]
+    first = with_leave[0] if with_leave else ordered[0]
+    revision = max(plan.revision for plan in ordered)
+    return [
+        NotificationIntent(
+            person_id=profile.id,
+            mission_id=state.mission_id,
+            plan_id=f"{state.mission_id}:{revision}",
+            revision=revision,
+            notification_id=f"{state.mission_id}:{kind}",
+            kind=kind,
+            severity=_SEVERITY[kind],
+            title=title,
+            message=message,
+            recommended_leave_time=first.recommended_leave,
+            latest_leave_time=first.latest_leave,
+            quality=first.quality,
+            reason_codes=(),
+            packing_items=items,
+            channels=tuple(profile.scripts.keys()),
+            tag=_tag(state.mission_id),
+            action_nonce=state.action_nonce,
+            lunch_menu=lunch_text if kind == KIND_EVENING else None,
+            slot=DIGEST_SLOT,
+        )
+    ]

@@ -26,15 +26,16 @@ from custom_components.family_departures.const import (
 )
 from custom_components.family_departures.dispatcher import NotificationDispatcher
 from custom_components.family_departures.models import (
+    CalendarLink,
     MissionState,
     NotificationIntent,
     PackingRule,
     ProfileConfig,
     ScheduleEvent,
     ScheduleResult,
-    SourceFilter,
 )
 from custom_components.family_departures.store import FamilyDeparturesStore
+from freezegun import freeze_time
 from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse
 from homeassistant.util import dt as dt_util
 
@@ -63,18 +64,15 @@ def _profile(
     name: str | None = None,
     scripts: dict[str, str] | None = None,
     packing_rules: tuple[PackingRule, ...] = (),
+    copy_to: tuple[str, ...] = (),
+    notifications_enabled: bool = True,
 ) -> ProfileConfig:
     from datetime import time as _t
 
     return ProfileConfig(
         id=profile_id,
         name=name if name is not None else profile_id.replace("_", " ").title(),
-        source_type="ics",
-        calendar_entity_id=None,
-        source_filter=SourceFilter(exclude_patterns=(), include_patterns=()),
-        destination_id=f"{profile_id}_destination",
-        dest_lat=59.4,
-        dest_lon=18.1,
+        default_location_id=f"{profile_id}_destination",
         default_mode="public_transport",
         static_minutes=None,
         static_label=None,
@@ -84,14 +82,22 @@ def _profile(
         weekday_mask=frozenset({0, 1, 2, 3, 4}),
         packing_rules=packing_rules,
         person_entity_id=None,
-        notifications_enabled=True,
+        notifications_enabled=notifications_enabled,
         change_threshold_minutes=3,
         quiet_start=_t.fromisoformat("22:00:00"),
         quiet_end=_t.fromisoformat("06:00:00"),
         scripts=(
             scripts if scripts is not None else {"push": f"script.push_{profile_id}"}
         ),
+        calendar_links=(
+            CalendarLink(
+                link_id="main",
+                calendar_id=f"{profile_id}_calendar",
+                role="main",
+            ),
+        ),
         evening_notice_enabled=True,
+        copy_to=copy_to,
     )
 
 
@@ -102,6 +108,7 @@ def _intent(
     kind: str = "leave_now",
     channels: tuple[str, ...] = ("push",),
     packing_items: tuple[str, ...] = (),
+    lunch_menu: str | None = None,
 ) -> NotificationIntent:
     return NotificationIntent(
         person_id=person_id,
@@ -121,6 +128,7 @@ def _intent(
         channels=channels,
         tag=f"departure_{mission_id}",
         action_nonce=NONCE,
+        lunch_menu=lunch_menu,
     )
 
 
@@ -233,6 +241,22 @@ async def test_event_fired_with_intent_content(
     assert events[0]["notification_id"] == f"{MISSION_ID}:leave_now"
 
 
+async def test_script_variables_carry_the_lunch_menu(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    dispatcher = _dispatcher(hass, store, {"kid_a": _profile()})
+
+    await dispatcher.async_dispatch(
+        [_intent(lunch_menu="Lunch imorgon: Pasta"), _intent(kind="reminder")]
+    )
+    await hass.async_block_till_done()
+
+    with_lunch, without = (call["variables"] for call in recorder.calls)
+    assert with_lunch["lunch_menu"] == "Lunch imorgon: Pasta"
+    assert without["lunch_menu"] is None
+
+
 async def test_profile_without_channel_script_is_skipped_silently(
     hass: HomeAssistant, store: FamilyDeparturesStore
 ) -> None:
@@ -325,6 +349,176 @@ async def test_test_recipient_reroutes_all_profiles_to_one_script(
 
 
 # ---------------------------------------------------------------------------
+# Notification copies (feature 7, plan §6.4)
+# ---------------------------------------------------------------------------
+
+
+def _kid_and_parent(**kid: Any) -> dict[str, ProfileConfig]:
+    return {
+        "kid_a": _profile("kid_a", scripts={}, copy_to=("parent_b",), **kid),
+        "parent_b": _profile("parent_b", scripts={"push": "script.push_parent_b"}),
+    }
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_a_kid_without_scripts_copies_to_the_parents_push_script(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    dispatcher = _dispatcher(hass, store, _kid_and_parent())
+
+    await dispatcher.async_dispatch([_intent()])
+    await hass.async_block_till_done()
+
+    assert recorder.entities == ["script.push_parent_b"]
+    variables = recorder.calls[0]["variables"]
+    assert variables["title"] == "[Kopia] Kid A – dags att gå"
+    assert variables["is_copy"] is True
+    assert variables["copy_of_person_id"] == "kid_a"
+    assert variables["copy_of_name"] == "Kid A"
+    assert variables["recipient_person_id"] == "parent_b"
+    # The tag and nonce are the original mission's.
+    assert variables["tag"] == f"departure_{MISSION_ID}"
+    assert variables["action_nonce"] == NONCE
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_the_copy_follows_the_original_and_uses_the_push_script_only(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    profiles = {
+        "kid_a": _profile(
+            "kid_a",
+            scripts={"push": "script.push_kid_a", "tts": "script.tts_kid_a"},
+            copy_to=("parent_b",),
+        ),
+        "parent_b": _profile(
+            "parent_b",
+            scripts={"push": "script.push_parent_b", "tts": "script.tts_parent_b"},
+        ),
+    }
+    dispatcher = _dispatcher(hass, store, profiles)
+
+    await dispatcher.async_dispatch([_intent(channels=("push", "tts"))])
+    await hass.async_block_till_done()
+
+    # Original channels first, then the one copy; TTS is never duplicated.
+    assert recorder.entities == [
+        "script.push_kid_a",
+        "script.tts_kid_a",
+        "script.push_parent_b",
+    ]
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_mutual_copies_send_one_copy_each_way(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    profiles = {
+        "kid_a": _profile("kid_a", scripts={}, copy_to=("parent_b",)),
+        "parent_b": _profile(
+            "parent_b", scripts={"push": "script.push_parent_b"}, copy_to=("kid_a",)
+        ),
+    }
+    dispatcher = _dispatcher(hass, store, profiles)
+
+    await dispatcher.async_dispatch([_intent()])
+    await hass.async_block_till_done()
+
+    assert recorder.entities == ["script.push_parent_b"]  # no copy back to kid_a
+
+
+@freeze_time("2026-10-20T20:00:00+00:00")  # 22:00 local: parent_b is quiet
+async def test_a_copy_in_the_recipients_quiet_hours_is_dropped_unless_critical(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    dispatcher = _dispatcher(hass, store, _kid_and_parent())
+
+    await dispatcher.async_dispatch([_intent(kind="morning")])
+    assert recorder.calls == []
+    await dispatcher.async_dispatch([_intent(kind="critical")])
+    await hass.async_block_till_done()
+
+    assert recorder.entities == ["script.push_parent_b"]
+    assert recorder.calls[0]["variables"]["kind"] == "critical"
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_a_recipient_with_notifications_off_gets_no_copy(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    profiles = _kid_and_parent()
+    profiles["parent_b"] = _profile(
+        "parent_b",
+        scripts={"push": "script.push_parent_b"},
+        notifications_enabled=False,
+    )
+    dispatcher = _dispatcher(hass, store, profiles)
+
+    await dispatcher.async_dispatch([_intent()])
+    await hass.async_block_till_done()
+
+    assert recorder.calls == []
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_dry_run_sends_no_copy_but_the_event_lists_recipients(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    events: list[Any] = []
+    hass.bus.async_listen(EVENT_NOTIFICATION, lambda e: events.append(e.data))
+    dispatcher = _dispatcher(hass, store, _kid_and_parent(), dry_run=True)
+
+    await dispatcher.async_dispatch([_intent()])
+    await hass.async_block_till_done()
+
+    assert recorder.calls == []
+    assert [e["copied_to"] for e in events] == [["parent_b"]]
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_test_recipient_mode_titles_and_tags_the_copy(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    recorder = ScriptRecorder(hass)
+    dispatcher = _dispatcher(
+        hass, store, _kid_and_parent(), test_recipient="script.push_test"
+    )
+
+    await dispatcher.async_dispatch([_intent()])
+    await hass.async_block_till_done()
+
+    assert set(recorder.entities) == {"script.push_test"}
+    original, copy = [c["variables"] for c in recorder.calls]
+    assert original["title"].startswith("[TEST Kid A]")
+    assert copy["title"] == "[TEST Parent B ← Kid A] Kid A – dags att gå"
+    assert copy["tag"] == f"departure_{MISSION_ID}_parent_b"
+    assert copy["is_copy"] is True
+
+
+@freeze_time("2026-10-20T10:00:00+00:00")
+async def test_one_hook_event_per_original_listing_the_recipients(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    ScriptRecorder(hass)
+    events: list[Any] = []
+    hass.bus.async_listen(EVENT_NOTIFICATION, lambda e: events.append(e.data))
+    dispatcher = _dispatcher(hass, store, _kid_and_parent())
+
+    await dispatcher.async_dispatch([_intent()])
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0]["copied_to"] == ["parent_b"]
+    assert events[0]["person_id"] == "kid_a"
+
+
+# ---------------------------------------------------------------------------
 # Companion-app actions (spec §12.3)
 # ---------------------------------------------------------------------------
 
@@ -376,6 +570,27 @@ async def test_off_action_writes_day_off_override(
     dispatcher.async_shutdown()
 
 
+async def test_skip_action_skips_only_that_mission(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    """FD_SKIP closes the tapped mission and leaves the person's others alone."""
+    extra_id = f"kid_a:{TODAY.isoformat()}:x-club-k1"
+    store.set_mission(_mission())
+    store.set_mission(_mission(extra_id))
+    dispatcher = _dispatcher(hass, store, {"kid_a": _profile()})
+    dispatcher.async_start()
+
+    await _fire_action(hass, f"FD_SKIP|{extra_id}|{NONCE}")
+
+    skipped = store.get_mission(extra_id)
+    other = store.get_mission(MISSION_ID)
+    assert skipped is not None and skipped.status == "skipped"
+    assert other is not None and other.status == "scheduled"
+    assert store.get_override("kid_a", TODAY) is None
+
+    dispatcher.async_shutdown()
+
+
 async def test_packed_action_acknowledges_that_dates_list(
     hass: HomeAssistant, store: FamilyDeparturesStore
 ) -> None:
@@ -383,9 +598,10 @@ async def test_packed_action_acknowledges_that_dates_list(
     # A PE lesson generates a "Gympakläder" item for TODAY.
     rules = (PackingRule(id="pe", match="IDRO", item="Gympakläder"),)
     profile = _profile(packing_rules=rules)
+    calendar_id = profile.calendar_links[0].calendar_id
     store.set_mission(_mission())
     store.set_schedule(
-        profile.destination_id,
+        calendar_id,
         TODAY,
         ScheduleResult(
             status="ok",
@@ -395,7 +611,7 @@ async def test_packed_action_acknowledges_that_dates_list(
                     summary="Lektion IDRO1000X",
                     start=datetime(2026, 10, 20, 8, 20, tzinfo=UTC),
                     end=datetime(2026, 10, 20, 9, 10, tzinfo=UTC),
-                    source_id=profile.destination_id,
+                    source_id=calendar_id,
                 ),
             ),
             fetched_at=dt_util.utcnow(),
@@ -408,6 +624,73 @@ async def test_packed_action_acknowledges_that_dates_list(
 
     assert "Gympakläder" in store.get_packing_acks("kid_a", TODAY)
 
+    dispatcher.async_shutdown()
+
+
+DIGEST_ID = f"kid_a:{TODAY.isoformat()}:day"
+
+
+async def test_digest_packed_acknowledges_the_digests_date(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    """FD_PACKED on the day-before digest acknowledges that day's list."""
+    rules = (PackingRule(id="pe", match="IDRO", item="Gympakläder"),)
+    profile = _profile(packing_rules=rules)
+    calendar_id = profile.calendar_links[0].calendar_id
+    store.set_mission(_mission(DIGEST_ID))
+    store.set_schedule(
+        calendar_id,
+        TODAY,
+        ScheduleResult(
+            status="ok",
+            events=(
+                ScheduleEvent(
+                    uid="e1",
+                    summary="Lektion IDRO1000X",
+                    start=datetime(2026, 10, 20, 8, 20, tzinfo=UTC),
+                    end=datetime(2026, 10, 20, 9, 10, tzinfo=UTC),
+                    source_id=calendar_id,
+                ),
+            ),
+            fetched_at=dt_util.utcnow(),
+        ),
+    )
+    dispatcher = _dispatcher(hass, store, {"kid_a": profile})
+    dispatcher.async_start()
+
+    await _fire_action(hass, f"FD_PACKED|{DIGEST_ID}|{NONCE}")
+
+    assert "Gympakläder" in store.get_packing_acks("kid_a", TODAY)
+    dispatcher.async_shutdown()
+
+
+async def test_digest_off_closes_the_whole_day(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    """FD_OFF on the digest writes the day's off override (all missions close)."""
+    store.set_mission(_mission(DIGEST_ID))
+    dispatcher = _dispatcher(hass, store, {"kid_a": _profile()})
+    dispatcher.async_start()
+
+    await _fire_action(hass, f"FD_OFF|{DIGEST_ID}|{NONCE}")
+
+    override = store.get_override("kid_a", TODAY)
+    assert override is not None and override.attendance == "off"
+    dispatcher.async_shutdown()
+
+
+async def test_digest_cannot_be_departed_or_skipped(
+    hass: HomeAssistant, store: FamilyDeparturesStore
+) -> None:
+    store.set_mission(_mission(DIGEST_ID))
+    dispatcher = _dispatcher(hass, store, {"kid_a": _profile()})
+    dispatcher.async_start()
+
+    await _fire_action(hass, f"FD_DEPARTED|{DIGEST_ID}|{NONCE}")
+    await _fire_action(hass, f"FD_SKIP|{DIGEST_ID}|{NONCE}")
+
+    state = store.get_mission(DIGEST_ID)
+    assert state is not None and state.status == "scheduled"
     dispatcher.async_shutdown()
 
 

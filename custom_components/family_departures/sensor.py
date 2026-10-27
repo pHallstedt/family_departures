@@ -38,9 +38,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import FamilyDeparturesConfigEntry
-from .coordinator import FamilyDeparturesCoordinator
+from .coordinator import FamilyDeparturesCoordinator, MissionResult
 from .entity import FamilyDeparturesEntity
-from .models import DeparturePlan
+from .models import DeparturePlan, LunchMenu
 
 # ``enum`` option lists mirror the model literals (spec §10, §11.2).
 _STATUS_OPTIONS = [
@@ -90,8 +90,14 @@ async def async_setup_entry(
                 _PackingListSensor(coordinator, entry.entry_id, profile_id),
                 _PackingListTomorrowSensor(coordinator, entry.entry_id, profile_id),
                 _DefaultTransportSensor(coordinator, entry.entry_id, profile_id),
+                _MissionsSensor(coordinator, entry.entry_id, profile_id, "today"),
+                _MissionsSensor(coordinator, entry.entry_id, profile_id, "tomorrow"),
             ]
         )
+        if coordinator.profile_configs[profile_id].lunch_calendar_entity_id:
+            entities.append(
+                _LunchTomorrowSensor(coordinator, entry.entry_id, profile_id)
+            )
     async_add_entities(entities)
 
 
@@ -111,6 +117,14 @@ def _plan_attributes(plan: DeparturePlan | None) -> dict[str, Any]:
         "reason_codes": list(plan.reason_codes),
         "alternative_available": plan.last_on_time_alternative_leave is not None,
     }
+    requirement = plan.requirement
+    attrs["slot"] = requirement.slot
+    if requirement.label:
+        attrs["label"] = requirement.label
+    if requirement.destination_name:
+        attrs["destination"] = requirement.destination_name
+    if requirement.warnings:
+        attrs["warnings"] = list(requirement.warnings)
     if plan.route_summary is not None:
         attrs["route_summary"] = plan.route_summary
     if plan.breakdown is not None:
@@ -359,3 +373,105 @@ class _DefaultTransportSensor(_ProfileSensor):
         if result is None:
             return None
         return result.profile.default_mode
+
+
+def _mission_summary(mission: MissionResult) -> dict[str, Any]:
+    """One mission as a §9-allowlisted attribute dict (no coordinates or URLs)."""
+    requirement = mission.requirement
+    summary: dict[str, Any] = {
+        "slot": requirement.slot,
+        "event_start": requirement.event_start.isoformat(),
+        "recommended_leave_time": (
+            mission.plan.recommended_leave.isoformat()
+            if mission.plan.recommended_leave is not None
+            else None
+        ),
+        "status": mission.plan.status,
+    }
+    if requirement.label:
+        summary["label"] = requirement.label
+    if requirement.destination_name:
+        summary["destination"] = requirement.destination_name
+    if requirement.warnings:
+        summary["warnings"] = list(requirement.warnings)
+    return summary
+
+
+class _MissionsSensor(_ProfileSensor):
+    """How many missions a profile has today or tomorrow, with a summary each.
+
+    Tomorrow's count is unknown (``None``) until the evening preview exists, so
+    an empty tomorrow is never confused with a not-yet-computed one.
+    """
+
+    def __init__(
+        self,
+        coordinator: FamilyDeparturesCoordinator,
+        entry_id: str,
+        profile_id: str,
+        day: str,
+    ) -> None:
+        super().__init__(coordinator, entry_id, profile_id, f"missions_{day}")
+        self._day = day
+
+    def _missions(self) -> tuple[MissionResult, ...] | None:
+        result = self.result
+        if result is None:
+            return None
+        if self._day == "today":
+            return result.missions
+        if result.tomorrow_schedule is None:
+            return None
+        return result.tomorrow_missions
+
+    @property
+    def native_value(self) -> int | None:
+        missions = self._missions()
+        return len(missions) if missions is not None else None
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        missions = self._missions()
+        if missions is None:
+            return None
+        return {"missions": [_mission_summary(m) for m in missions]}
+
+
+class _LunchTomorrowSensor(_ProfileSensor):
+    """Tomorrow's school lunch (plan §7.4); ``None`` unless a menu was found.
+
+    Created only for a profile with a lunch calendar. A weekend, a holiday or a
+    failing source leaves it empty rather than showing a made-up menu.
+    """
+
+    def __init__(
+        self,
+        coordinator: FamilyDeparturesCoordinator,
+        entry_id: str,
+        profile_id: str,
+    ) -> None:
+        super().__init__(coordinator, entry_id, profile_id, "lunch_tomorrow")
+
+    def _menu(self) -> LunchMenu | None:
+        result = self.result
+        if result is None or result.lunch_tomorrow is None:
+            return None
+        return result.lunch_tomorrow
+
+    @property
+    def native_value(self) -> str | None:
+        menu = self._menu()
+        if menu is None or menu.status != "ok":
+            return None
+        return ", ".join(menu.dishes)[:255]
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        menu = self._menu()
+        if menu is None:
+            return None
+        return {
+            "date": menu.local_date.isoformat(),
+            "dishes": list(menu.dishes),
+            "status": menu.status,
+        }
